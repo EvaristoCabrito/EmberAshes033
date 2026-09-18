@@ -86,7 +86,7 @@ export function portraitFor(sprite: SpriteId): { src: string; framed: boolean } 
 }
 
 const TILES = Object.keys(TILE_VARIANT_COUNT) as TerrainId[];
-const SPRITES: SpriteId[] = ["kael", "nira", "voss", "salazar", "malrec", "aldric", "defaultLancer", "soldier", "brigand", "captain", "sorcerer", "horror", "Asherah", "pikeman", "wardog", "troll", "morvenian-wolf", "punisher", "theButcher", "birolho", "birolho2", "birolho3", "familiar", "swamp-blue-calf", "ancient-golem", "lancer", "sandoval", "kaelFinal", "kaelEarly", "conjurer"];
+const SPRITES: SpriteId[] = ["kael", "nira", "voss", "salazar", "malrec", "aldric", "defaultLancer", "soldier", "brigand", "captain", "sorcerer", "horror", "Asherah", "pikeman", "wardog", "troll", "morvenian-wolf", "punisher", "theButcher", "birolho", "birolho2", "birolho3", "familiar", "swamp-blue-calf", "ancient-golem", "lancer", "sandoval", "kaelFinal", "kaelEarly", "conjurer", "cultist-v2"];
 
 const LOAD_POOL = 8;
 let loadActive = 0;
@@ -186,7 +186,7 @@ export async function loadGameArt(): Promise<GameArt> {
   const attacks: Partial<Record<SpriteId, HTMLImageElement[]>> = {};
   await Promise.all(
     SPRITES.map(async (id) => {
-      const n = id === "conjurer" || id === "kaelFinal" || id === "aldric" ? 36 : id === "sandoval" ? 8 : id === "birolho2" ? 18 : id === "birolho3" ? 12 : HERO_IDLE.has(id) ? 12 : 4;
+      const n = id === "conjurer" || id === "kaelFinal" || id === "aldric" || id === "cultist-v2" ? 36 : id === "sandoval" ? 8 : id === "birolho2" ? 18 : id === "birolho3" ? 12 : HERO_IDLE.has(id) ? 12 : 4;
       const cacheBust = id === "troll" ? "?v=11" : id === "Asherah" ? "?v=3" : id === "familiar" ? "?v=6" : id === "aldric" ? "?v=aldric-final-001" : id === "malrec" || id === "defaultLancer" ? "?v=sheet2" : id === "lancer" ? "?v=3" : id === "sandoval" ? "?v=sandoval-complete-001" : id === "kaelFinal" ? "?v=kael-final-002" : id === "kaelEarly" ? "?v=kael-early" : id === "kael" ? "?v=kael-v2" : id === "conjurer" ? "?v=conjurer-complete-003" : "";
       sprites[id] = await Promise.all(
         Array.from({ length: n }, (_, i) =>
@@ -222,6 +222,7 @@ export async function loadGameArt(): Promise<GameArt> {
     sandoval: { n: 6, bust: "?v=sandoval-complete-001" },
     kaelFinal: { n: 36, bust: "?v=kael-final-002" },
     conjurer: { n: 36, bust: "?v=conjurer-complete-003" },
+    "cultist-v2": { n: 36, bust: "" },
   };
   await Promise.all(
     (Object.keys(ATTACK_FRAMES) as SpriteId[]).map(async (id) => {
@@ -241,6 +242,7 @@ export async function loadGameArt(): Promise<GameArt> {
     // Aldric's dedicated skill pose — plays only for his spell-typed pike skills (Piercing
     // Thrust, Sweep, ...), never for a plain attack, which stays on the ATT cut.
     aldric: { n: 36, bust: "?v=aldric-final-001" },
+    "cultist-v2": { n: 36, bust: "" },
   };
   const casts: Partial<Record<SpriteId, HTMLImageElement[]>> = {};
   await Promise.all(
@@ -295,6 +297,8 @@ export async function loadGameArt(): Promise<GameArt> {
     // Right-facing cut; see the dedicated walksLeft.theButcher load below for its own
     // authored left-facing cut (not the CSS mirror every other sprite here falls back to).
     theButcher: { n: 36, bust: "?v=the-butcher-001" },
+    // Right-facing cut; see the dedicated walksLeft["cultist-v2"] load below.
+    "cultist-v2": { n: 36, bust: "" },
   };
   const walks: Partial<Record<SpriteId, HTMLImageElement[]>> = {};
   await Promise.all(
@@ -323,9 +327,17 @@ export async function loadGameArt(): Promise<GameArt> {
   walksLeft.theButcher = await Promise.all(
     Array.from({ length: WALK_FRAMES.theButcher!.n }, (_, i) => loadImage(spriteFrameSrc("theButcher", `move-left-${i + 1}`, WALK_FRAMES.theButcher!.bust))),
   );
+  // Cultist V2 has its own authored left-facing walk cut but no dedicated left-facing attack
+  // cut (only one Attack sheet was supplied) — same shape as theButcher above: its own
+  // standalone walksLeft load, attack keeps mirroring the right-facing pool when facing left.
+  walksLeft["cultist-v2"] = await Promise.all(
+    Array.from({ length: WALK_FRAMES["cultist-v2"]!.n }, (_, i) => loadImage(spriteFrameSrc("cultist-v2", `move-left-${i + 1}`, WALK_FRAMES["cultist-v2"]!.bust))),
+  );
   const impact = await Promise.all([1, 2, 3, 4].map((n) => loadImage(`/game/fx/impact-${n}.png`)));
-  const fireballCore = await loadImage("/game/fx/fireball-core-v1.png?v=1");
-  const causticVenomCore = await loadImage("/game/fx/caustic-venom-core-v1.png?v=1");
+  // v2: real alpha-cutout comet art (ball + trailing wisps), replacing the old flattened
+  // black-background v1 that only ever worked by additive-blending the black away.
+  const fireballCore = await loadImage("/game/fx/fireball-core-v2.png?v=1");
+  const causticVenomCore = await loadImage("/game/fx/caustic-venom-core-v2.png?v=1");
   const arrowCore = deriveAlphaFromBlack(await loadImage("/game/fx/arrow-002.png?v=1"));
   const lightningCores = await Promise.all([
     loadImage("/game/fx/lightning-core-v1.png?v=1"),

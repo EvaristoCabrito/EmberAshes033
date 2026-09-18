@@ -845,6 +845,25 @@ export const CLASSES: Record<ClassId, ClassDef> = {
     size: 1,
     init: 5,
   },
+  // Same kit as Feiticeiro (see runAiFor's cultist/cultistV2 branch, ENEMY_MAGE_IDS,
+  // cultistSpellUses) — its own dedicated art (idle/walk/attack/cast, all 36-frame authored
+  // cuts, see assets.ts) and a distinct name, not a reskin of the same class.
+  cultistV2: {
+    id: "cultistV2",
+    name: "Cultista Ancestral",
+    role: "Rito",
+    hp: 23,
+    atk: 2,
+    mag: 9,
+    def: 2,
+    res: 5,
+    mov: 3,
+    minRange: 1,
+    maxRange: 2,
+    sprite: "cultist-v2",
+    size: 1,
+    init: 5,
+  },
   horror: {
     id: "horror",
     name: "Horror",
@@ -1360,6 +1379,7 @@ export const GROWTH: Record<ClassId, { hp: number; atk: number; mag: number; def
   birolho2: { hp: 4, atk: 2, mag: 0, def: 2, res: 2 },
   birolho3: { hp: 4, atk: 2, mag: 0, def: 2, res: 2 },
   cultist: { hp: 3, atk: 0, mag: 2, def: 1, res: 2 },
+  cultistV2: { hp: 3, atk: 0, mag: 2, def: 1, res: 2 },
   horror: { hp: 4, atk: 2, mag: 0, def: 2, res: 2 },
   asherah: { hp: 5, atk: 2, mag: 0, def: 2, res: 2 },
   troll: { hp: 5, atk: 2, mag: 0, def: 2, res: 1 },
@@ -2483,6 +2503,7 @@ export const EMBER_DROP: Partial<Record<ClassId, number>> = {
   birolho3: 9,
   swampBlueCalf: 2,
   cultist: 4,
+  cultistV2: 4,
   captain: 6,
   horror: 10,
   asherah: 12,
@@ -2508,12 +2529,12 @@ export function emberFromCompleted(completed: string[]): number {
 // what actually carries the heal's growth, the same one lever every other spell here grows
 // by.
 export const CURES: Record<HealId, { name: string; dice: number; faces: number; bonus: number; mul: number; range: number }> = {
-  cureMinor: { name: "Cura Menor", dice: 1, faces: 6, bonus: 0, mul: 1.0, range: 1 },
-  cureWounds: { name: "Cura Média", dice: 2, faces: 6, bonus: 0, mul: 1.6, range: 2 },
+  cureMinor: { name: "Cura Menor", dice: 1, faces: 6, bonus: 0, mul: 1.0, range: 2 },
+  cureWounds: { name: "Cura Média", dice: 2, faces: 6, bonus: 0, mul: 1.6, range: 3 },
   // Paladin tier 4: mechanically identical to the Healer's Cura Média (same dice/mul/range,
   // "the same as Healer" per spec) — a distinct HealId so its tier-4 uses are its own pool,
   // never shared with the Healer's tier-2 Cura Média.
-  cureLight: { name: "Cura Leve", dice: 2, faces: 6, bonus: 0, mul: 1.6, range: 2 },
+  cureLight: { name: "Cura Leve", dice: 2, faces: 6, bonus: 0, mul: 1.6, range: 3 },
 };
 
 export function rollDice(dice: number, faces: number, bonus: number, rng: () => number): number {
@@ -2568,7 +2589,7 @@ export function potionSpan(kind: PotionId): string {
 export const FIREBALL = {
   name: "Bola De Fogo",
   size: 2,
-  range: 4,
+  range: 5,
   // Two dice, not one: it is meant to land like a monster rather than a spark.
   dice: 2,
   faces: 6,
@@ -2585,7 +2606,7 @@ export const CAUSTIC_VENOM = {
   // hit poisons its target: 1D4 at the start of each of their own turns until cured by
   // Cure Disease or the disease potion (see startOfTurnEffects/curePlayerDisease).
   size: 3,
-  range: 6,
+  range: 7,
   centerDice: 1,
   centerFaces: 10,
   centerBonus: 0,
@@ -2840,7 +2861,7 @@ export function stampedeFormula(level: number): string {
 
 export const MAGIC_MISSILE = {
   name: "Míssil Mágico",
-  range: 4,
+  range: 5,
   // The caster's power carries this now (see mul); the dice only add variance.
   dice: 1,
   faces: 4,
@@ -2898,7 +2919,7 @@ export function birolhoSpellUses(level: number): { magicMissile: number; caustic
  * no duration to track, no re-cast limit beyond the tier's own uses per scenario. */
 export const SUMMON_FAMILIAR = {
   name: "Invocar Familiar",
-  range: 6,
+  range: 7,
   statScale: 0.5,
 };
 
@@ -2910,7 +2931,7 @@ export const SUMMON_FAMILIAR = {
  * "difficult terrain / restrained" part of the spell, folded into one mechanic. */
 export const WEB_OF_DREAMS = {
   name: "Teia dos Sonhos",
-  range: 6,
+  range: 7,
   size: 1,
   durationRounds: 3,
   sleepChance: 0.25,
@@ -2928,7 +2949,7 @@ export function webOfDreamsSize(level: number): number {
 
 export const LIGHTNING = {
   name: "Relâmpago",
-  range: 4,
+  range: 5,
   dice: 2,
   faces: 8,
   bonus: 0,
@@ -2941,7 +2962,7 @@ export const LIGHTNING = {
 /** Elementalist T5 thunderbolt — Relâmpago3. Bigger than Relâmpago on every lever. */
 export const LIGHTNING_T3 = {
   name: "Relâmpago3",
-  range: 6,
+  range: 7,
   dice: 3,
   faces: 12,
   bonus: 8,
@@ -2955,7 +2976,7 @@ export const LIGHTNING_T3 = {
  * Current bolt FX is this spell; Relâmpago itself now uses a heavier sky-strike. */
 export const SHOCK = {
   name: "Choque",
-  range: 4,
+  range: 5,
   dice: 1,
   faces: 6,
   bonus: 0,
@@ -2967,6 +2988,7 @@ export const SHOCK = {
 
 const ENEMY_MAGE_IDS: ReadonlySet<ClassId> = new Set([
   "cultist",
+  "cultistV2",
   "mage",
   "elementalist",
   "warlock",
@@ -2996,7 +3018,7 @@ export const DISEASE = {
 
 export const CURE_DISEASE = {
   name: "Curar Doença Leve",
-  range: 1,
+  range: 2,
 };
 
 /** Flat, for the same reason as fireballPower: the caster's MAG carries the growth now. */

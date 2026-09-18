@@ -43,10 +43,18 @@ export function MapPreviewCanvas({ mission, art, onCellClick, selectedDecoration
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
   const [isUnitDragging, setIsUnitDragging] = useState(false);
-  // Same board width used by the technical map. The scroll surface only becomes wider
-  // when this real board is wider than its window, so the horizontal bar is not permanent.
+  // Same board size the engine itself renders at (see BattleEngine.boardSize) — the scroll
+  // surface only grows past its window when the real board is actually bigger than it.
   const previewTileRadius = zoom < 1.125 ? 34 : zoom < 1.375 ? 50 : 72;
   const previewBoardWidth = Math.ceil(previewTileRadius * Math.sqrt(3) * (mission.cols + 0.5));
+  const previewBoardHeight = Math.ceil(previewTileRadius * (1.5 * (mission.rows - 1) + 2));
+  // Scrolling only moves the camera at PREVIEW_SCROLL_PAN_RATE of the raw scroll delta (a
+  // deliberately gentler feel than the technical grid's native scroll), so the scrollable
+  // range has to be inflated by the same factor — otherwise dragging the scrollbar all the
+  // way to an edge still pans the camera only a fraction of the way to the board's real edge,
+  // and the far side of any map bigger than a couple of screens is simply unreachable.
+  const previewScrollWidth = Math.ceil(previewBoardWidth / PREVIEW_SCROLL_PAN_RATE);
+  const previewScrollHeight = Math.ceil(previewBoardHeight / PREVIEW_SCROLL_PAN_RATE);
   const unitAt = (x: number, y: number): PreviewUnitSelection | null => {
     const groups = [
       { side: "playerSpawns" as const, units: mission.playerSpawns },
@@ -83,6 +91,7 @@ export function MapPreviewCanvas({ mission, art, onCellClick, selectedDecoration
       return;
     }
     let needsCameraRestore = cameraRef.current !== null;
+    let needsInitialCenter = !needsCameraRestore;
 
     // Live preview of any elemental FX placed on this map (see the editor's "FX" mode) —
     // same pipeline BattleCanvas uses, spawned once here as persistent instances so the
@@ -130,6 +139,16 @@ export function MapPreviewCanvas({ mission, art, onCellClick, selectedDecoration
           drawGroundAndUnits();
         }
         needsCameraRestore = false;
+      } else if (needsInitialCenter) {
+        // First-ever mount for this draft: the draw() above just ran the engine's own
+        // first-render focus (a spawn unit, or nowhere at all on a still-empty draft) —
+        // override it so the preview always opens on the map's own middle instead of
+        // wherever that landed. Only runs once — drawGroundAndUnits() can rerun many times
+        // after this (resize, elemental-FX animation frames) and must never re-center over
+        // panning the author already did.
+        engine.centerOnBoard();
+        drawGroundAndUnits();
+        needsInitialCenter = false;
       }
       // Drawn on the units canvas (top layer) so the highlight stays visible over units too,
       // matching where it used to land back when everything shared one canvas.
@@ -345,7 +364,7 @@ export function MapPreviewCanvas({ mission, art, onCellClick, selectedDecoration
         onContextMenu={(event) => event.preventDefault()}
         onScroll={onViewportScroll}
       >
-        <div className="min-h-[300%]" style={{ width: `max(100%, ${previewBoardWidth}px)` }}>
+        <div style={{ width: `max(100%, ${previewScrollWidth}px)`, minHeight: `max(100%, ${previewScrollHeight}px)` }}>
           <div className="sticky left-0 top-0 relative">
             <canvas ref={canvasRef} className="block" />
             <canvas ref={fxCanvasRef} className="pointer-events-none absolute inset-0 block" style={{ display: "none" }} />

@@ -47,6 +47,7 @@ export type ClassId =
   | "brigand"
   | "captain"
   | "cultist"
+  | "cultistV2"
   | "horror"
   | "asherah"
   | "pikeman"
@@ -87,7 +88,7 @@ export type ClassId =
   // computed live from its summoner (see castSummonFamiliar), CLASSES.familiar only
   // supplies a sprite/size/range fallback and satisfies the ClassId-keyed tables below.
   | "familiar";
-export type SpriteId = "kael" | "nira" | "voss" | "salazar" | "malrec" | "aldric" | "defaultLancer" | "soldier" | "brigand" | "captain" | "sorcerer" | "horror" | "Asherah" | "pikeman" | "wardog" | "troll" | "morvenian-wolf" | "punisher" | "theButcher" | "birolho" | "birolho2" | "birolho3" | "familiar" | "swamp-blue-calf" | "ancient-golem" | "lancer" | "sandoval" | "kaelFinal" | "kaelEarly" | "conjurer";
+export type SpriteId = "kael" | "nira" | "voss" | "salazar" | "malrec" | "aldric" | "defaultLancer" | "soldier" | "brigand" | "captain" | "sorcerer" | "horror" | "Asherah" | "pikeman" | "wardog" | "troll" | "morvenian-wolf" | "punisher" | "theButcher" | "birolho" | "birolho2" | "birolho3" | "familiar" | "swamp-blue-calf" | "ancient-golem" | "lancer" | "sandoval" | "kaelFinal" | "kaelEarly" | "conjurer" | "cultist-v2";
 export type HealId = "cureMinor" | "cureWounds" | "cureLight";
 export type SpellKind =
   | "fireball"

@@ -25,7 +25,11 @@ import {
 } from "./shaders";
 
 const ADDITIVE_ELEMENTS: ReadonlySet<ElementKind> = new Set(["fire", "lightning", "acid", "holy"]);
-const LIGHT_ELEMENTS: ReadonlySet<ElementKind> = new Set(["fire", "acid", "holy", "darkness"]);
+// webShot casts light (a travelling glow) without joining the additive group above — its own
+// body stays normal alpha-blended (see shaders.ts WEB_SHOT), the same "solid, opaque, glossy"
+// treatment that fixed Cleave/Piercing Thrust washing out over bright ground art; only the
+// light pass below (a separate glow painted onto the scene, not the shot's own body) is additive.
+const LIGHT_ELEMENTS: ReadonlySet<ElementKind> = new Set(["fire", "acid", "holy", "darkness", "webShot"]);
 const PARTICLE_ELEMENTS: ReadonlySet<ElementKind> = new Set(["fire", "holy"]);
 
 export interface EffectAnchor {
@@ -51,6 +55,22 @@ export interface SpawnOptions {
   aspect?: [number, number];
 }
 
+/** A continuously-repositioned, continuously-resized override for one effect instance — used
+ * only by the Dreaming Web shot, which needs sub-hex precision and a length that changes every
+ * frame as it travels, neither of which the tile-grid getAnchor(col,row) + radiusTiles/aspect
+ * model (built for effects fixed to one hex) can express. Every other effect kind leaves this
+ * unset and renders exactly as before. */
+export interface EffectOverride {
+  x: number;
+  y: number;
+  worldX: number;
+  worldY: number;
+  tile: number;
+  halfLengthPx: number;
+  halfWidthPx: number;
+  rotation: number;
+}
+
 interface EffectInstance {
   id: number;
   kind: ElementKind;
@@ -62,6 +82,7 @@ interface EffectInstance {
   duration: number | null;
   age: number;
   seed: number;
+  override: EffectOverride | null;
 }
 
 function uniformLocations<T extends readonly string[]>(
@@ -213,6 +234,7 @@ export class EffectsRenderer {
       duration: opts.duration ?? null,
       age: 0,
       seed: Math.random() * 1000,
+      override: null,
     });
     if (PARTICLE_ELEMENTS.has(kind)) this.particleEmitters.set(id, new ParticleEmitter(kind as "fire" | "holy"));
     return id;
@@ -221,6 +243,14 @@ export class EffectsRenderer {
   removeEffect(id: number): void {
     this.effects.delete(id);
     this.particleEmitters.delete(id);
+  }
+
+  /** Repositions/resizes a live effect for this frame — see EffectOverride. The caller
+   * (BattleCanvas, driven by BattleEngine.webShotBeam) calls this every frame while the
+   * Dreaming Web shot is in flight; every other effect kind never calls this and is unaffected. */
+  updateOverride(id: number, override: EffectOverride | null): void {
+    const fx = this.effects.get(id);
+    if (fx) fx.override = override;
   }
 
   clearAll(): void {
@@ -316,10 +346,15 @@ export class EffectsRenderer {
     gl.uniform1f(this.uLight.u_time, this.time);
     for (const fx of this.effects.values()) {
       if (!LIGHT_ELEMENTS.has(fx.kind)) continue;
-      const anchor = getAnchor(fx.col, fx.row);
+      const ov = fx.override;
+      const anchor = ov ?? getAnchor(fx.col, fx.row);
       // Darkness's "light removal" radius stays matched to its visual shape; an actual light
-      // source (fire/acid/holy) throws its glow noticeably further than its own flame/shape.
-      const radius = anchor.tile * fx.radiusTiles * (fx.kind === "darkness" ? 1 : GLOBAL_FX_PARAMS.lightRadiusMul);
+      // source (fire/acid/holy/webShot) throws its glow noticeably further than its own
+      // flame/shape. webShot has no radiusTiles (it's sized in pixels via override), so its
+      // glow radius is keyed off its own half-width instead.
+      const radius = ov
+        ? ov.halfWidthPx * GLOBAL_FX_PARAMS.lightRadiusMul * 1.8
+        : anchor.tile * fx.radiusTiles * (fx.kind === "darkness" ? 1 : GLOBAL_FX_PARAMS.lightRadiusMul);
       const params = EFFECT_PARAMS[fx.kind];
       gl.uniform1i(this.uLight.u_element, ELEMENT_INDEX[fx.kind]);
       gl.uniform1f(this.uLight.u_seed, fx.seed);
@@ -349,8 +384,15 @@ export class EffectsRenderer {
     gl.uniform1i(this.uElemental.u_noiseTex, 1);
 
     const drawElemental = (fx: EffectInstance) => {
-      const anchor = getAnchor(fx.col, fx.row);
-      const radius = anchor.tile * fx.radiusTiles;
+      const ov = fx.override;
+      const anchor = ov ?? getAnchor(fx.col, fx.row);
+      const rx = ov ? ov.halfLengthPx : anchor.tile * fx.radiusTiles * fx.aspect[0];
+      const ry = ov ? ov.halfWidthPx : anchor.tile * fx.radiusTiles * fx.aspect[1];
+      const rot = ov ? ov.rotation : fx.rotation;
+      const anchorX = anchor.x;
+      const anchorY = anchor.y;
+      const anchorWorldX = anchor.worldX;
+      const anchorWorldY = anchor.worldY;
       const params = EFFECT_PARAMS[fx.kind];
       gl.uniform1i(this.uElemental.u_element, ELEMENT_INDEX[fx.kind]);
       gl.uniform1f(this.uElemental.u_seed, fx.seed);
@@ -363,13 +405,13 @@ export class EffectsRenderer {
         this.uElemental,
         this.effectsFbo.w,
         this.effectsFbo.h,
-        anchor.x,
-        anchor.y,
-        radius * fx.aspect[0],
-        radius * fx.aspect[1],
-        fx.rotation,
-        anchor.worldX,
-        anchor.worldY,
+        anchorX,
+        anchorY,
+        rx,
+        ry,
+        rot,
+        anchorWorldX,
+        anchorWorldY,
       );
     };
 

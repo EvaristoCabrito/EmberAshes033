@@ -2,7 +2,7 @@
  * the renderer reads them fresh every draw call, so changes apply on the next frame with no
  * extra plumbing. */
 
-export type ElementKind = "fire" | "ice" | "water" | "lightning" | "acid" | "holy" | "darkness" | "shore" | "shore2" | "water2" | "water3" | "water4" | "water5";
+export type ElementKind = "fire" | "ice" | "water" | "lightning" | "acid" | "holy" | "darkness" | "shore" | "shore2" | "water2" | "water3" | "water4" | "water5" | "web" | "webShot";
 
 export const ELEMENT_KINDS: readonly ElementKind[] = [
   "fire",
@@ -18,7 +18,19 @@ export const ELEMENT_KINDS: readonly ElementKind[] = [
   "water3",
   "water4",
   "water5",
+  "web",
+  "webShot",
 ];
+
+export const PLACEABLE_ELEMENT_KINDS: readonly PlaceableElementKind[] = ELEMENT_KINDS.filter(
+  (k): k is PlaceableElementKind => k !== "web" && k !== "webShot",
+);
+
+/** Elemental FX kinds the map editor lets an author manually place as a permanent battle
+ * fixture (see ElementalFxPlacement in types.ts) — every ElementKind except the ones driven
+ * purely by gameplay: Dreaming Web's floor patch and travelling shot are spawned and despawned
+ * by the spell itself (see BattleCanvas's live sync), never hand-placed. */
+export type PlaceableElementKind = Exclude<ElementKind, "web" | "webShot">;
 
 export const ELEMENT_LABELS: Record<ElementKind, string> = {
   fire: "Fire",
@@ -34,6 +46,8 @@ export const ELEMENT_LABELS: Record<ElementKind, string> = {
   water3: "Water 3 (Natural Shore)",
   water4: "Water 4 (Rocky Shore)",
   water5: "Water 5 (Bay Shore)",
+  web: "Dreaming Web (floor)",
+  webShot: "Dreaming Web (shot)",
 };
 
 export interface ElementParams {
@@ -68,6 +82,9 @@ export const DEFAULT_ELEMENT_PARAMS: Record<ElementKind, ElementParams> = {
   water3: { noiseScale: 2.0, scrollSpeed: 0.35, intensity: 0.9, color: [0.35, 0.65, 0.85] },
   water4: { noiseScale: 2.0, scrollSpeed: 0.55, intensity: 0.9, color: [0.35, 0.65, 0.85] },
   water5: { noiseScale: 2.0, scrollSpeed: 0.22, intensity: 0.9, color: [0.35, 0.65, 0.85] },
+  // Same vivid violet for both — the shot and the patch it leaves behind read as the same magic.
+  web: { noiseScale: 3.0, scrollSpeed: 0.5, intensity: 1.0, color: [0.59, 0.23, 0.84] },
+  webShot: { noiseScale: 4.0, scrollSpeed: 3.2, intensity: 1.1, color: [0.59, 0.23, 0.84] },
 };
 
 /** Mutable live copy — clone so resetting one element never touches the shipped defaults. */
@@ -97,6 +114,7 @@ export const DEFAULT_RADIUS_TILES: Partial<Record<ElementKind, number>> = {
   water3: 1.0,
   water4: 1.0,
   water5: 1.0,
+  web: 1.0,
 };
 
 /** Non-uniform (width, height) footprint multiplier for a placement that doesn't specify its

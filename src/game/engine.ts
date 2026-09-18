@@ -153,6 +153,12 @@ const ARROW_TRAVEL = MISSILE_TRAVEL;
  * — stepSpell's own finishCombat threshold for every spell — so the trail's afterglow never
  * outlives the active step it belongs to. */
 const MISSILE_AFTERGLOW = 0.2;
+/** Dreaming Web's shot is purely cosmetic — the spell's real effect (the zone, the sleep
+ * rolls) already happens synchronously in castWebOfDreams before this ever starts playing, so
+ * unlike every other MissileFx kind its travel time isn't tied to any hit-timing threshold and
+ * can just be as long as it needs to be to actually read as the dense, tangled WebGL beam it
+ * is (see BattleEngine.webShotBeam / shaders.ts WEB_SHOT) instead of a blink-and-miss streak. */
+export const WEB_SHOT_TRAVEL = 0.85;
 
 /** A traveling spell bolt (currently just Magic Missile) — hex-to-hex in pixel space, timed to
  * land right as stepSpell's own hit/damage tick fires (a.t >= MISSILE_HIT_AT), so the streak
@@ -235,6 +241,24 @@ const LIGHTNING_FX_CAP = 16;
 
 function blankLightningFx(): LightningFx {
   return { live: false, x: 0, y: 0, t: 0, max: LIGHTNING_STRIKE_DUR, hue: 205, segs: [], branches: [], power: "shock" };
+}
+
+/** A blue conjuring circle that opens on the ground, spins, and closes again — Summon
+ * Familiar's cast tell. Purely cosmetic and self-timed: the familiar itself is added to
+ * `this.units` immediately (so its stats/turn-order slot exist right away), just with
+ * `fade: 0` until this plays out, so it visibly steps out of the portal rather than the two
+ * looking unrelated. */
+interface PortalFx {
+  live: boolean;
+  x: number;
+  y: number;
+  t: number;
+  max: number;
+  seed: number;
+}
+const PORTAL_FX_CAP = 4;
+function blankPortalFx(): PortalFx {
+  return { live: false, x: 0, y: 0, t: 0, max: 0.85, seed: 0 };
 }
 
 /** Divine light / potion burst sitting on a character. Independent of healGlow so the old
@@ -636,7 +660,7 @@ function spawnUnit(spawn: Mission["playerSpawns"][number], side: Unit["side"], i
       // tier1/tier2/tier4 uses — see cultistSpellUses/brigandSpellUses/birolhoSpellUses and
       // runAiFor's cultist/brigand/birolho branches.
       tier1:
-        cls.id === "cultist"
+        cls.id === "cultist" || cls.id === "cultistV2"
           ? cultistSpellUses(level).magicMissile
           : cls.id === "brigand"
             ? brigandSpellUses(level).longShot
@@ -644,7 +668,7 @@ function spawnUnit(spawn: Mission["playerSpawns"][number], side: Unit["side"], i
               ? birolhoSpellUses(level).magicMissile
               : remainingTier(cls.id, 1, "tier1", level, side, roster, spawn.name),
       tier2:
-        cls.id === "cultist"
+        cls.id === "cultist" || cls.id === "cultistV2"
           ? cultistSpellUses(level).lightning
           : cls.id === "brigand"
             ? brigandSpellUses(level).piercing
@@ -994,6 +1018,8 @@ export class BattleEngine {
   private holyFxLive = 0;
   private bladeFx: BladeFx[] = Array.from({ length: BLADE_FX_CAP }, blankBladeFx);
   private bladeFxLive = 0;
+  private portalFx: PortalFx[] = Array.from({ length: PORTAL_FX_CAP }, blankPortalFx);
+  private portalFxLive = 0;
   /** Flips each time Double Strike lands, so its two hits swoosh opposite diagonals and read
    * as one crossing pair of slashes rather than the same cut drawn twice. */
   private doubleStrikeAlt = false;
@@ -1584,9 +1610,12 @@ export class BattleEngine {
       if (u.levelGlow > 0) u.levelGlow = Math.max(0, u.levelGlow - cap * 0.42);
       if (u.healGlow > 0) u.healGlow = Math.max(0, u.healGlow - cap * 0.7);
       if (!u.alive && u.fade > 0) u.fade = Math.max(0, u.fade - cap * 2.4);
+      // A freshly summoned unit starts at fade 0 (see castSummonFamiliar) and eases back in
+      // while its portal plays, rather than popping fully opaque the instant it's added.
+      else if (u.alive && u.fade < 1) u.fade = Math.min(1, u.fade + cap * 2.4);
       if (u.alive) {
         const haste =
-          u.classId === "wardog" ? 1.4 : u.size >= 4 ? 0.58 : u.classId === "mage" || u.classId === "cultist" ? 0.8 : 1;
+          u.classId === "wardog" ? 1.4 : u.size >= 4 ? 0.58 : u.classId === "mage" || u.classId === "cultist" || u.classId === "cultistV2" ? 0.8 : 1;
         u.bob += cap * haste;
       }
     }
@@ -1685,6 +1714,19 @@ export class BattleEngine {
       }
       this.bladeFxLive = live;
     }
+    if (this.portalFxLive) {
+      let live = 0;
+      for (const p of this.portalFx) {
+        if (!p.live) continue;
+        p.t += cap;
+        if (p.t >= p.max) {
+          p.live = false;
+          continue;
+        }
+        live += 1;
+      }
+      this.portalFxLive = live;
+    }
     if (this.hitstop > 0) {
       this.hitstop -= cap;
       this.emit();
@@ -1717,7 +1759,16 @@ export class BattleEngine {
   private startSeq(step: Seq): void {
     if (step.type === "move") {
       this.active = { type: "move", id: step.id, path: step.path, i: 0, t: 0 };
-      sfxPlay.move();
+      // Cultist V2 has its own dedicated left/right walk cues (see assets.ts's move-left-*
+      // cut) — play whichever matches this move's own first step instead of the generic
+      // footstep beep every other sprite uses.
+      const mover = this.units.find((u) => u.id === step.id);
+      if (mover?.sprite === "cultist-v2" && step.path.length >= 2) {
+        if (step.path[1]!.x < step.path[0]!.x) sfxPlay.cultistV2WalkLeft();
+        else sfxPlay.cultistV2WalkRight();
+      } else {
+        sfxPlay.move();
+      }
     } else if (step.type === "combat") {
       const target = this.units.find((u) => u.id === step.def);
       if (!target || !target.alive) return;
@@ -1914,7 +1965,8 @@ export class BattleEngine {
           sfxPlay.arrowAttack();
           this.emitMissileFx(actor.x, actor.y, target.x, target.y, "longShot");
         } else if (arcaneBolt) {
-          sfxPlay.magicAttack();
+          if (actor.sprite === "cultist-v2") sfxPlay.cultistV2Attack();
+          else sfxPlay.magicAttack();
           this.emitMissileFx(actor.x, actor.y, target.x, target.y, "arcaneBolt");
         } else {
           sfxPlay.meleeAttack();
@@ -1977,6 +2029,18 @@ export class BattleEngine {
           }
           this.spawnHit(target, hit.dmg, hit.crit, !this.isArrowAttack(actor) && !this.isArcaneCaster(actor));
           this.pushLog(`${actor.name} atacou ${target.name}: ${hit.dmg} dano${hit.crit ? " (crítico)" : ""}`);
+          // The blade swoosh is the visual for the strike landing, not for the target
+          // surviving it — fire it here, unconditionally, same as spawnHit/pushLog above,
+          // rather than nested under the "target lived" branch below (where it used to be
+          // silently skipped on any kill).
+          if (a.stage === "hit" && a.spellKind === "trip") this.emitBladeFx("lowCut", target.x, target.y);
+          if (a.stage === "hit" && a.spellKind === "doubleStrike") {
+            const oc = this.hexCenter(actor.x, actor.y);
+            const tc = this.hexCenter(target.x, target.y);
+            const base = Math.atan2(tc.cy - oc.cy, tc.cx - oc.cx);
+            this.doubleStrikeAlt = !this.doubleStrikeAlt;
+            this.emitBladeFx("cross", target.x, target.y, { a0: base + (this.doubleStrikeAlt ? 0.7 : -0.7) });
+          }
           if (target.hp <= 0) {
             this.markDead(target);
           } else {
@@ -1995,14 +2059,6 @@ export class BattleEngine {
                 target.mov = Math.max(1, Math.round(target.mov * keep));
               }
               sfxPlay.trip();
-              this.emitBladeFx("lowCut", target.x, target.y);
-            }
-            if (a.stage === "hit" && a.spellKind === "doubleStrike") {
-              const oc = this.hexCenter(actor.x, actor.y);
-              const tc = this.hexCenter(target.x, target.y);
-              const base = Math.atan2(tc.cy - oc.cy, tc.cx - oc.cx);
-              this.doubleStrikeAlt = !this.doubleStrikeAlt;
-              this.emitBladeFx("cross", target.x, target.y, { a0: base + (this.doubleStrikeAlt ? 0.7 : -0.7) });
             }
           }
         }
@@ -2074,6 +2130,7 @@ export class BattleEngine {
     if (!a.hit && a.t >= hitAt) {
       a.hit = true;
       if (a.spellKind === "webOfDreams") sfxPlay.dreamingWeb();
+      else if (att.sprite === "cultist-v2") sfxPlay.cultistV2Spellcast();
       else sfxPlay.spell();
       // AoE/line spells: the first enemy actually hit grants full XP, every enemy after
       // that in the same cast grants half — hitting a whole group shouldn't out-earn
@@ -2878,7 +2935,7 @@ export class BattleEngine {
 
   /** Only spellcasting classes use the distinct basic-attack arcane bolt. */
   private isArcaneCaster(unit: Unit): boolean {
-    return unit.classId === "mage" || unit.classId === "voss" || unit.classId === "elementalist" || unit.classId === "warlock" || unit.classId === "cultist" || unit.classId === "birolho" || unit.classId === "birolho2" || unit.classId === "birolho3";
+    return unit.classId === "mage" || unit.classId === "voss" || unit.classId === "elementalist" || unit.classId === "warlock" || unit.classId === "cultist" || unit.classId === "cultistV2" || unit.classId === "birolho" || unit.classId === "birolho2" || unit.classId === "birolho3";
   }
 
   /** One glowing bolt per target, hex-to-hex — see MissileFx. */
@@ -2901,7 +2958,7 @@ export class BattleEngine {
     slot.toX = toX;
     slot.toY = toY;
     slot.t = 0;
-    slot.travel = kind === "longShot" ? ARROW_TRAVEL : MISSILE_TRAVEL;
+    slot.travel = kind === "longShot" ? ARROW_TRAVEL : kind === "webOfDreams" ? WEB_SHOT_TRAVEL : MISSILE_TRAVEL;
     slot.max = slot.travel + MISSILE_AFTERGLOW;
     slot.hue = kind === "fireball" ? 22 : kind === "causticVenom" ? 104 : kind === "longShot" ? 205 : kind === "arcaneBolt" ? 2 : kind === "webOfDreams" ? 276 : 268;
     slot.kind = kind;
@@ -2954,6 +3011,28 @@ export class BattleEngine {
     }
   }
 
+  /** Summon Familiar's conjuring circle — see PortalFx/drawPortalFx. */
+  private emitPortalFx(x: number, y: number): void {
+    if (this.reducedMotion) return;
+    let slot = this.portalFx.find((p) => !p.live);
+    if (!slot) {
+      slot = this.portalFx[0]!;
+      let oldest = 0;
+      for (const p of this.portalFx) {
+        if (p.t / p.max > oldest) {
+          oldest = p.t / p.max;
+          slot = p;
+        }
+      }
+    } else this.portalFxLive += 1;
+    slot.live = true;
+    slot.x = x;
+    slot.y = y;
+    slot.t = 0;
+    slot.max = 0.85;
+    slot.seed = this.rng() * Math.PI * 2;
+  }
+
   /** One steel-swoosh effect — see BladeFx/BladeKind. Shared by every warrior/lancer/knight
    * physical skill; `opts` fills in only whatever that shape needs (arc's a0/a1, dash's
    * toX/toY, Shoulder Smash's warm tint). */
@@ -2985,7 +3064,7 @@ export class BattleEngine {
     slot.a1 = opts.a1 ?? opts.a0 ?? 0;
     slot.warm = opts.warm ?? false;
     slot.t = 0;
-    slot.max = opts.dur ?? (kind === "ring" || kind === "shockRing" ? 0.44 : kind === "dash" ? 0.3 : 0.34);
+    slot.max = opts.dur ?? (kind === "ring" || kind === "shockRing" ? 0.46 : kind === "dash" ? 0.36 : 0.4);
     slot.seed = this.rng() * Math.PI * 2;
   }
 
@@ -4553,7 +4632,10 @@ export class BattleEngine {
       levelGlow: 0,
       healGlow: 0,
       healGlowKind: "potionZero",
-      fade: 1,
+      // Starts invisible and eases in while the conjuring circle plays (see emitPortalFx and
+      // the fade-in tick branch), so it visibly steps out of the portal instead of appearing
+      // fully solid the instant it's added to this.units.
+      fade: 0,
       bob: 0,
       level: unit.level,
       xp: 0,
@@ -4588,18 +4670,8 @@ export class BattleEngine {
     this.spendTier(unit, "summonFamiliar");
     this.spellKind = null;
     this.missileTargets = [];
-    this.emitParticle({
-      x: cell.x,
-      y: cell.y - 0.2,
-      vx: 0,
-      vy: -0.3,
-      life: 0,
-      max: 0.5,
-      size: 1.4,
-      color: "#8c6cd8",
-      kind: "impact",
-      frame: 0,
-    });
+    this.emitPortalFx(cell.x, cell.y);
+    sfxPlay.summonFamiliar();
     this.tip = `${unit.name} invocou ${familiar.name}.`;
     // Unlike the original instant summon, route the completed summon through the same
     // queued spell action that Birolho uses. The familiar remains exactly the same;
@@ -5460,9 +5532,10 @@ export class BattleEngine {
     const walkReach = computeReachable(this.effectiveUnitForReach(next), this.tiles, this.cols, this.rows, this.units, false, this.decorOverlay);
     const players = this.units.filter((u) => u.side === "player" && u.alive);
 
-    // Cultist ("Feiticeiro") — Relâmpago outranks Choque outranks Magic Missile. Choque
-    // ignores cover the same way Relâmpago does; Magic Missile still needs line of sight.
-    if (next.classId === "cultist" && (next.spells.tier1 > 0 || next.spells.tier2 > 0 || next.shockCharges > 0)) {
+    // Cultist ("Feiticeiro") and Cultist V2 ("Cultista Ancestral") — same kit, same priority:
+    // Relâmpago outranks Choque outranks Magic Missile. Choque ignores cover the same way
+    // Relâmpago does; Magic Missile still needs line of sight.
+    if ((next.classId === "cultist" || next.classId === "cultistV2") && (next.spells.tier1 > 0 || next.spells.tier2 > 0 || next.shockCharges > 0)) {
       if (next.spells.tier2 > 0) {
         let bestBolt: { foe: Unit; from: Point; score: number } | null = null;
         for (const cell of reach.values()) {
@@ -5655,6 +5728,7 @@ export class BattleEngine {
       next.side === "enemy" &&
       next.shockCharges > 0 &&
       next.classId !== "cultist" &&
+      next.classId !== "cultistV2" &&
       next.classId !== "birolho" &&
       next.classId !== "birolho2" &&
       next.classId !== "birolho3" &&
@@ -6113,6 +6187,36 @@ export class BattleEngine {
     return { x: cx, y: cy, tile, worldX, worldY };
   }
 
+  /** Live geometry for Dreaming Web's travelling WebGL shot — null whenever no such shot is
+   * currently in flight (including once it lands: the beam only exists while actually
+   * travelling, per the same `m.t < m.travel` window MissileFx tracks; the floor patch that
+   * appears at the target hex is its own separate "web" effect, not this one fading out).
+   * BattleCanvas polls this every frame and feeds it straight into
+   * EffectsRenderer.updateOverride — see EffectOverride for why a fixed-hex getAnchor(col,row)
+   * effect can't represent a continuously moving, continuously growing beam on its own. */
+  webShotBeam(): { x: number; y: number; worldX: number; worldY: number; tile: number; angle: number; length: number } | null {
+    const m = this.missileFx.find((x) => x.live && x.kind === "webOfDreams" && x.t < x.travel);
+    if (!m) return null;
+    const from = this.effectAnchor(m.fromX, m.fromY);
+    const to = this.effectAnchor(m.toX, m.toY);
+    const k = Math.min(1, m.t / m.travel);
+    const headX = from.x + (to.x - from.x) * k;
+    const headY = from.y + (to.y - from.y) * k;
+    const headWorldX = from.worldX + (to.worldX - from.worldX) * k;
+    const headWorldY = from.worldY + (to.worldY - from.worldY) * k;
+    const dx = headX - from.x;
+    const dy = headY - from.y;
+    return {
+      x: (from.x + headX) / 2,
+      y: (from.y + headY) / 2,
+      worldX: (from.worldX + headWorldX) / 2,
+      worldY: (from.worldY + headWorldY) / 2,
+      tile: from.tile,
+      angle: Math.atan2(dy, dx),
+      length: Math.hypot(dx, dy),
+    };
+  }
+
   panBy(dx: number, dy: number): void {
     this.camX += dx;
     this.camY += dy;
@@ -6229,6 +6333,14 @@ export class BattleEngine {
     const u = this.units.find((x) => x.side === "player" && x.alive) ?? this.units[0];
     if (!u) return;
     this.centerOn(u.x, u.y);
+  }
+
+  /** Centers the camera on the board's own geometric middle, independent of any unit's
+   * position — unlike focusPlayers/centerOn, which the map editor's preview panel should NOT
+   * use: a spawn tucked near one edge (or no units at all yet, on a still-empty draft) would
+   * otherwise leave the preview opening on a corner instead of showing the whole drafted map. */
+  centerOnBoard(): void {
+    this.centerOn((this.cols - 1) / 2, (this.rows - 1) / 2);
   }
 
   private centerOn(col: number, row: number): void {
@@ -6518,7 +6630,7 @@ export class BattleEngine {
     const base =
       u.classId === "horror" || u.classId === "asherah" || u.classId === "troll" || u.classId === "ancientGolem"
         ? 2.0
-        : u.sprite === "kael" || u.sprite === "kaelEarly" || u.classId === "mage" || u.classId === "cultist" || u.classId === "healer"
+        : u.sprite === "kael" || u.sprite === "kaelEarly" || u.classId === "mage" || u.classId === "cultist" || u.classId === "cultistV2" || u.classId === "healer"
           ? 1.7
           : isBossClass(u.classId)
             ? 1.75
@@ -6699,86 +6811,6 @@ export class BattleEngine {
     if (u.diseased) layer(false);
   }
 
-  /**
-   * Web of Dreams is a painted floor state, not a sprite/status effect. Keep this pass
-   * immediately after terrain so every later battlefield layer (props, targeting,
-   * shadows, units and combat FX) naturally covers it. The geometry is deliberately
-   * static and opaque: no pulse, additive blend, blur, mask, alpha fade or impact ring.
-   */
-  private drawWebFloorMarks(ctx: CanvasRenderingContext2D, tile: number, cssW: number, cssH: number): void {
-    ctx.save();
-    ctx.globalCompositeOperation = "source-over";
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = "rgb(126, 52, 177)";
-    ctx.lineWidth = Math.max(1.5, tile * 0.027);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.shadowColor = "transparent";
-    ctx.shadowBlur = 0;
-
-    for (const zone of this.webZones) {
-      // The projectile remains the cast tell. Once it reaches the target, the complete
-      // mark appears on the terrain without an expanding/floating transition.
-      if (zone.createdAt != null && this.time < zone.createdAt + MISSILE_TRAVEL) continue;
-      for (const packed of zone.cells) {
-        const comma = packed.indexOf(",");
-        const x = Number(packed.slice(0, comma));
-        const y = Number(packed.slice(comma + 1));
-        if (!Number.isFinite(x) || !Number.isFinite(y) || !this.explored(x, y)) continue;
-        const { cx, cy } = this.hexCenter(x, y);
-        if (cx < -tile || cy < -tile || cx > cssW + tile || cy > cssH + tile) continue;
-
-        // A regular, symmetric orb web flattened to the board's perspective. Its outer
-        // anchors remain inside one hex, so no clipping/mask is needed.
-        const anchorCount = 8;
-        const radius = tile * 0.76;
-        const floorY = 0.5;
-        const rotation = -Math.PI / 2;
-        const anchors: { x: number; y: number }[] = [];
-        for (let i = 0; i < anchorCount; i += 1) {
-          const angle = rotation + (i / anchorCount) * Math.PI * 2;
-          anchors.push({ x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius * floorY });
-        }
-
-        ctx.beginPath();
-        for (const anchor of anchors) {
-          ctx.moveTo(cx, cy);
-          ctx.lineTo(anchor.x, anchor.y);
-        }
-        for (let band = 1; band <= 5; band += 1) {
-          const fraction = 0.16 + band * 0.16;
-          for (let i = 0; i < anchorCount; i += 1) {
-            const fromAnchor = anchors[i]!;
-            const toAnchor = anchors[(i + 1) % anchorCount]!;
-            const fromX = cx + (fromAnchor.x - cx) * fraction;
-            const fromY = cy + (fromAnchor.y - cy) * fraction;
-            const toX = cx + (toAnchor.x - cx) * fraction;
-            const toY = cy + (toAnchor.y - cy) * fraction;
-            const inward = 0.82;
-            const controlX = cx + (((fromX + toX) * 0.5) - cx) * inward;
-            const controlY = cy + (((fromY + toY) * 0.5) - cy) * inward;
-            ctx.moveTo(fromX, fromY);
-            ctx.quadraticCurveTo(controlX, controlY, toX, toY);
-          }
-        }
-        // Two strokes on the same ground path: a restrained violet light spill followed
-        // by the opaque thread. This entire pass precedes props and actors, so the glow
-        // cannot wrap around feet or appear over a sprite.
-        ctx.save();
-        ctx.strokeStyle = "rgba(151, 45, 255, 0.42)";
-        ctx.lineWidth = Math.max(2.4, tile * 0.055);
-        ctx.shadowColor = "rgba(151, 45, 255, 0.58)";
-        ctx.shadowBlur = tile * 0.075;
-        ctx.stroke();
-        ctx.restore();
-        ctx.strokeStyle = "rgb(151, 58, 214)";
-        ctx.lineWidth = Math.max(1.5, tile * 0.027);
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
-  }
-
   /** Draws a complete frame: ground then units/overlays, on one canvas — everything below
    * still works exactly as before. A caller that needs units/HP-bars on a visually separate
    * layer from the ground (see BattleCanvas's WebGL elemental-FX overlay, which needs to
@@ -6892,9 +6924,9 @@ export class BattleEngine {
       }
     }
 
-    // Persistent Web of Dreams belongs to the terrain stack. Do not move this below any
-    // decoration, targeting overlay, unit shadow or unit sprite.
-    this.drawWebFloorMarks(ctx, tile, cssW, cssH);
+    // Dreaming Web's persistent floor patch is the WebGL "web" element (see BattleCanvas's
+    // live webZones sync), which sits on the ground layer between this canvas and the units
+    // canvas — no 2D drawing of it belongs here.
     // Ground/behind decorations are drawn in renderUnitsAndOverlays instead of here, so they
     // land on the units canvas — stacked above the WebGL elemental FX canvas sitting in
     // between this canvas and that one (see BattleCanvas) — rather than being hidden under it.
@@ -7106,6 +7138,7 @@ export class BattleEngine {
     // A rear parapet must remain visible over the ground and tactical highlights, while
     // character sprites still pass in front of it.
     this.drawDecorations(ctx, tile, cssW, cssH, "behind");
+    this.drawPortalFx(ctx, tile);
 
     const cell = tile * sqrt3;
     const sorted = [...this.units].sort((a, b) => a.drawY - b.drawY || a.drawX - b.drawX);
@@ -7196,7 +7229,11 @@ export class BattleEngine {
       const dirActionWalk = (u.sprite === "malrec" || u.sprite === "aldric" || u.sprite === "defaultLancer" || u.sprite === "lancer" || u.sprite === "sandoval" || u.sprite === "theButcher") && moving;
       const dirActionAttack = (u.sprite === "malrec" || u.sprite === "aldric" || u.sprite === "defaultLancer" || u.sprite === "lancer" || u.sprite === "sandoval") && atk != null;
       const dirAction = dirActionWalk || dirActionAttack;
-      const flip = dirAction ? 1 : u.facing;
+      // The familiar's art is drawn facing left by default — the opposite of every other
+      // sprite's "facing 1 shows the sheet as drawn" convention — so its mirror has to run
+      // backwards from u.facing or it walks left while visually facing right and vice versa.
+      const facing = u.classId === "familiar" ? -u.facing : u.facing;
+      const flip = dirAction ? 1 : facing;
       if (u.sprite === "kael" || u.sprite === "kaelEarly" || u.sprite === "malrec" || u.sprite === "aldric" || u.sprite === "defaultLancer" || u.sprite === "lancer" || u.sprite === "sandoval" || u.sprite === "conjurer") ctx.scale(flip, 1);
       else ctx.scale(flip * (1 - breath * 0.22), 1 + breath);
       if (u.levelGlow > 0) {
@@ -7527,35 +7564,11 @@ export class BattleEngine {
           continue;
         }
 
-        if (m.kind === "webOfDreams") {
-          const head = along(kHead);
-          const fade = 1 - afterglow;
-          ctx.save();
-          ctx.globalCompositeOperation = "source-over";
-          ctx.globalAlpha = fade;
-          ctx.lineCap = "round";
-          ctx.shadowColor = "transparent";
-          ctx.shadowBlur = 0;
-          // Keep the approved purple cast trail, but do not let the projectile create a
-          // second glowing web above the battlefield. The actual web appears only in the
-          // terrain pass when the projectile arrives.
-          for (let strand = -1; strand <= 1; strand += 1) {
-            const backK = Math.max(0, kHead - 0.12 - Math.abs(strand) * 0.018);
-            const back = along(backK);
-            ctx.strokeStyle = strand === 0 ? "rgb(126, 52, 177)" : "rgb(91, 35, 137)";
-            ctx.lineWidth = Math.max(1, tile * (strand === 0 ? 0.026 : 0.014));
-            ctx.beginPath();
-            ctx.moveTo(back.x, back.y + strand * tile * 0.025);
-            ctx.lineTo(head.x, head.y);
-            ctx.stroke();
-          }
-          ctx.fillStyle = "rgb(126, 52, 177)";
-          ctx.beginPath();
-          ctx.arc(head.x, head.y, Math.max(1.5, tile * 0.045), 0, Math.PI * 2);
-          ctx.fill();
-          ctx.restore();
-          continue;
-        }
+        // Dreaming Web's shot is now the WebGL "webShot" beam (see BattleEngine.webShotBeam /
+        // BattleCanvas) — this MissileFx entry still exists purely as the timing clock that
+        // drives it (fromX/Y, toX/Y, t, travel), so it's kept alive and aged like any other
+        // missile, it just draws nothing of its own here.
+        if (m.kind === "webOfDreams") continue;
 
         const minorArcaneBolt = m.kind === "arcaneBolt";
 
@@ -7666,7 +7679,7 @@ export class BattleEngine {
             }
             ctx.restore();
           }
-                    const projectileCore = m.kind === "fireball" ? this.art.fireballCore : m.kind === "causticVenom" ? this.art.causticVenomCore : null;
+          const projectileCore = m.kind === "fireball" ? this.art.fireballCore : m.kind === "causticVenom" ? this.art.causticVenomCore : null;
           if (m.kind === "longShot" && this.art.arrowCore) {
             // One shared approved arrow asset for normal shots, Multi Shot, Long Shot and Piercing Shot.
             const angle = Math.atan2(dyT, dxT);
@@ -7679,18 +7692,26 @@ export class BattleEngine {
             ctx.restore();
           }
           if (projectileCore) {
-            // Dense physical flame core; black source pixels disappear under additive blend.
+            // v2 art: a real alpha-cutout comet (dense ball toward the source's own
+            // bottom-right corner, wispy tail trailing to the top-left), drawn with normal
+            // alpha compositing now that it has actual transparency instead of the old v1's
+            // flattened black background (which only ever worked via additive blending).
             const img = projectileCore;
-            // Crop away the intentionally huge black 4K margin. Only the real flame core is
-            // scaled to the map, where it remains visibly layered with the code trail.
-            const crop = Math.min(img.naturalWidth, img.naturalHeight) * 0.58;
-            const sx = (img.naturalWidth - crop) / 2;
-            const sy = (img.naturalHeight - crop) / 2;
-            const size = tile * (1.02 + Math.sin(this.time * 13 + m.seed) * 0.06);
+            const flightAngle = Math.atan2(dyT, dxT);
+            // The art's ball-and-tail sit on its own fixed diagonal (45°, bottom-right) —
+            // rotating by the difference between that and the shot's actual flight angle
+            // points the ball at the target regardless of cast direction, the same
+            // orient-to-travel-direction treatment as Dreaming Web's shot (see
+            // BattleEngine.webShotBeam).
+            const pulse = 1 + 0.05 * Math.sin(this.time * 13 + m.seed);
+            const w = tile * 1.9 * pulse;
+            const h = (w * img.naturalHeight) / img.naturalWidth;
             ctx.save();
-            ctx.globalCompositeOperation = "lighter";
+            ctx.translate(head.x, head.y);
+            ctx.rotate(flightAngle - Math.PI / 4);
+            ctx.globalCompositeOperation = "source-over";
             ctx.globalAlpha = auraFade;
-            ctx.drawImage(img, sx, sy, crop, crop, head.x - size / 2, head.y - size / 2, size, size);
+            ctx.drawImage(img, -w / 2, -h / 2, w, h);
             ctx.restore();
           }
           ctx.fillStyle = `rgba(255,255,255,${(physicalArrow ? 0 : 0.95) * auraFade})`;
@@ -7909,6 +7930,84 @@ export class BattleEngine {
     ctx.globalAlpha = 1;
   }
 
+  /** Summon Familiar's conjuring circle — a blue magic ring that opens on the ground, holds,
+   * then closes, drawn on the ground layer (before the sorted unit-sprite pass) so the
+   * familiar visibly steps out of it as its own fade-in ramps up (see castSummonFamiliar /
+   * the `else if (u.alive && u.fade < 1)` tick branch) instead of just popping in next to an
+   * unrelated puff of particles. */
+  private drawPortalFx(ctx: CanvasRenderingContext2D, tile: number): void {
+    if (!this.portalFxLive) return;
+    const ease = (x: number) => 1 - (1 - Math.min(1, Math.max(0, x))) ** 3;
+    for (const p of this.portalFx) {
+      if (!p.live) continue;
+      const { cx, cy } = this.hexCenter(p.x, p.y);
+      const k = p.t / p.max;
+      const openEnd = 0.35;
+      const closeStart = 0.65;
+      const radiusK = k < openEnd ? ease(k / openEnd) : k < closeStart ? 1 : Math.max(0, 1 - ease((k - closeStart) / (1 - closeStart)));
+      if (radiusK <= 0.01) continue;
+      const maxR = tile * 0.95;
+      const r = maxR * radiusK;
+      const spin = p.t * 3.2 + p.seed;
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+
+      const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.3);
+      glow.addColorStop(0, `rgba(150,195,255,${0.55 * radiusK})`);
+      glow.addColorStop(0.6, `rgba(95,145,255,${0.32 * radiusK})`);
+      glow.addColorStop(1, "rgba(60,110,255,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, r * 1.3, r * 1.3 * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Outer ring: a broken circle of arcs rotating one way — the "magic circle" border.
+      const segs = 10;
+      ctx.strokeStyle = `rgba(175,218,255,${0.85 * radiusK})`;
+      ctx.lineWidth = Math.max(1.5, tile * 0.035);
+      ctx.shadowColor = "rgba(140,190,255,0.9)";
+      ctx.shadowBlur = tile * 0.25;
+      for (let i = 0; i < segs; i++) {
+        const a0 = spin + (i / segs) * Math.PI * 2;
+        const a1 = a0 + ((Math.PI * 2) / segs) * 0.55;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, r, r * 0.55, 0, a0, a1);
+        ctx.stroke();
+      }
+
+      // Inner ring: tighter, thinner, spinning the opposite way — reads as a second rune
+      // band rather than a duplicate of the outer one.
+      ctx.strokeStyle = `rgba(222,240,255,${0.7 * radiusK})`;
+      ctx.lineWidth = Math.max(1, tile * 0.018);
+      ctx.shadowBlur = tile * 0.15;
+      const innerSegs = 6;
+      for (let i = 0; i < innerSegs; i++) {
+        const a0 = -spin * 1.4 + (i / innerSegs) * Math.PI * 2;
+        const a1 = a0 + ((Math.PI * 2) / innerSegs) * 0.6;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, r * 0.6, r * 0.6 * 0.55, 0, a0, a1);
+        ctx.stroke();
+      }
+
+      // A few motes drifting up out of the circle.
+      ctx.shadowBlur = 0;
+      const motes = 6;
+      for (let i = 0; i < motes; i++) {
+        const ang = p.seed + i * 2.4;
+        const rise = (p.t * 0.6 + i * 0.17) % 1;
+        const mx = cx + Math.cos(ang) * r * 0.5;
+        const my = cy - rise * tile * 0.9 - r * 0.1;
+        ctx.fillStyle = `rgba(195,222,255,${(1 - rise) * 0.6 * radiusK})`;
+        ctx.beginPath();
+        ctx.arc(mx, my, tile * 0.025, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+  }
+
   /** The shared steel-swoosh visual — see BladeFx/BladeKind. Every shape here is plain
    * white-steel light (glow pass + bright core pass), the same treatment a real blade catches
    * the light with, and never fire or a magic-circle glow. */
@@ -7919,121 +8018,209 @@ export class BattleEngine {
       const k = b.t / b.max;
       const { cx, cy } = this.hexCenter(b.x, b.y);
       ctx.save();
-      ctx.globalCompositeOperation = "lighter";
       ctx.lineCap = "round";
+      ctx.lineJoin = "round";
 
       if (b.kind === "arc") {
-        const swing = Math.min(1, k / 0.55);
-        const fade = k < 0.55 ? 1 : Math.max(0, 1 - (k - 0.55) / 0.45);
-        if (fade > 0) {
-          const radius = tile * 1.05;
-          const start = b.a0;
+        // A filled crescent (outer arc forward, inner arc back) rather than a thin translucent
+        // stroke — reads as an actual blade sweep at a glance instead of a faint smear, and a
+        // dark source-over outline first keeps it legible over bright ground art that would
+        // otherwise wash out a purely additive white streak.
+        const swingEnd = 0.42;
+        const swing = Math.min(1, k / swingEnd);
+        const fadeStart = 0.48;
+        const fade = k < fadeStart ? 1 : Math.max(0, 1 - (k - fadeStart) / (1 - fadeStart));
+        if (fade > 0.01) {
+          // Adjacent hex centers sit tile*sqrt3 (~1.73*tile) apart, not ~1*tile — the band has
+          // to actually stretch out past the attacker's own hex and across the 3 target hexes'
+          // centers, or the whole sweep reads as a small smudge sitting on the attacker instead
+          // of a blade cutting through the fanned-out hexes.
+          const rOuter = tile * 2.05;
+          const rInner = tile * 0.95;
           const end = b.a0 + (b.a1 - b.a0) * swing;
-          const glowColor = b.warm ? `rgba(255,188,108,${0.55 * fade})` : `rgba(222,236,255,${0.5 * fade})`;
-          ctx.strokeStyle = glowColor;
-          ctx.lineWidth = tile * (b.warm ? 0.44 : 0.34);
-          ctx.shadowColor = b.warm ? "rgba(255,150,55,0.9)" : "rgba(215,232,255,0.9)";
-          ctx.shadowBlur = tile * 0.35;
-          ctx.beginPath();
-          ctx.arc(cx, cy, radius, start, end);
-          ctx.stroke();
+          const path = new Path2D();
+          path.arc(cx, cy, rOuter, b.a0, end, false);
+          path.arc(cx, cy, rInner, end, b.a0, true);
+          path.closePath();
+
+          ctx.globalCompositeOperation = "source-over";
+          ctx.globalAlpha = fade;
+          ctx.strokeStyle = "rgba(10,14,22,0.85)";
+          ctx.lineWidth = tile * 0.055;
+          ctx.stroke(path);
+
+          const grad = ctx.createRadialGradient(cx, cy, rInner, cx, cy, rOuter);
+          if (b.warm) {
+            grad.addColorStop(0, "rgba(255,150,60,0.12)");
+            grad.addColorStop(0.42, "rgba(255,255,255,0.97)");
+            grad.addColorStop(0.75, "rgba(255,195,120,0.92)");
+            grad.addColorStop(1, "rgba(255,140,50,0.1)");
+          } else {
+            grad.addColorStop(0, "rgba(170,205,255,0.12)");
+            grad.addColorStop(0.42, "rgba(255,255,255,0.98)");
+            grad.addColorStop(0.75, "rgba(205,228,255,0.92)");
+            grad.addColorStop(1, "rgba(150,195,255,0.1)");
+          }
+          ctx.fillStyle = grad;
+          ctx.fill(path);
+
+          ctx.globalCompositeOperation = "lighter";
+          ctx.shadowColor = b.warm ? "rgba(255,150,55,0.9)" : "rgba(190,220,255,0.9)";
+          ctx.shadowBlur = tile * 0.4;
+          ctx.fillStyle = b.warm ? `rgba(255,180,100,${0.3 * fade})` : `rgba(205,228,255,${0.3 * fade})`;
+          ctx.fill(path);
           ctx.shadowBlur = 0;
-          ctx.strokeStyle = `rgba(255,255,255,${0.95 * fade})`;
-          ctx.lineWidth = tile * (b.warm ? 0.15 : 0.1);
-          ctx.beginPath();
-          ctx.arc(cx, cy, radius, start, end);
-          ctx.stroke();
+
+          if (swing < 1) {
+            const midR = (rOuter + rInner) / 2;
+            const tipX = cx + Math.cos(end) * midR;
+            const tipY = cy + Math.sin(end) * midR;
+            const flash = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, tile * 0.42);
+            flash.addColorStop(0, `rgba(255,255,255,${0.95 * fade})`);
+            flash.addColorStop(1, "rgba(255,255,255,0)");
+            ctx.fillStyle = flash;
+            ctx.beginPath();
+            ctx.arc(tipX, tipY, tile * 0.42, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
-      } else if (b.kind === "cross") {
-        const fade = Math.max(0, 1 - k);
-        if (fade > 0) {
-          const len = tile * 0.95;
-          const dx = Math.cos(b.a0) * len * 0.5;
-          const dy = Math.sin(b.a0) * len * 0.5;
-          ctx.translate(cx, cy - tile * 0.15);
-          ctx.strokeStyle = `rgba(222,236,255,${0.6 * fade})`;
-          ctx.lineWidth = tile * 0.18;
-          ctx.shadowColor = "rgba(215,232,255,0.9)";
-          ctx.shadowBlur = tile * 0.25;
+      } else if (b.kind === "cross" || b.kind === "lowCut") {
+        const low = b.kind === "lowCut";
+        const fade = Math.max(0, 1 - k * (low ? 1.25 : 1.1));
+        if (fade > 0.01) {
+          const len = tile * (low ? 0.78 : 1.05);
+          const ang = low ? 0.07 : b.a0;
+          const oy = low ? tile * 0.3 : -tile * 0.15;
+          const dx = Math.cos(ang) * len * 0.5;
+          const dy = Math.sin(ang) * len * 0.5;
+          ctx.translate(cx, cy + oy);
+          ctx.globalCompositeOperation = "source-over";
+          ctx.globalAlpha = fade;
+          ctx.strokeStyle = "rgba(10,14,22,0.85)";
+          ctx.lineWidth = tile * (low ? 0.13 : 0.16);
           ctx.beginPath();
           ctx.moveTo(-dx, -dy);
           ctx.lineTo(dx, dy);
           ctx.stroke();
-          ctx.shadowBlur = 0;
-          ctx.strokeStyle = `rgba(255,255,255,${0.95 * fade})`;
-          ctx.lineWidth = tile * 0.06;
+          ctx.strokeStyle = "rgba(255,255,255,0.98)";
+          ctx.lineWidth = tile * (low ? 0.05 : 0.065);
           ctx.beginPath();
           ctx.moveTo(-dx, -dy);
           ctx.lineTo(dx, dy);
           ctx.stroke();
-        }
-      } else if (b.kind === "lowCut") {
-        const fade = Math.max(0, 1 - k);
-        if (fade > 0) {
-          const len = tile * 0.7;
-          ctx.translate(cx, cy + tile * 0.28);
-          ctx.strokeStyle = `rgba(222,236,255,${0.6 * fade})`;
-          ctx.lineWidth = tile * 0.14;
-          ctx.shadowColor = "rgba(215,232,255,0.85)";
-          ctx.shadowBlur = tile * 0.2;
+          ctx.globalCompositeOperation = "lighter";
+          ctx.strokeStyle = `rgba(205,228,255,${0.55 * fade})`;
+          ctx.lineWidth = tile * (low ? 0.22 : 0.26);
+          ctx.shadowColor = "rgba(205,228,255,0.9)";
+          ctx.shadowBlur = tile * 0.3;
           ctx.beginPath();
-          ctx.moveTo(-len * 0.5, 0);
-          ctx.lineTo(len * 0.5, tile * 0.05);
-          ctx.stroke();
-          ctx.shadowBlur = 0;
-          ctx.strokeStyle = `rgba(255,255,255,${0.9 * fade})`;
-          ctx.lineWidth = tile * 0.045;
-          ctx.beginPath();
-          ctx.moveTo(-len * 0.5, 0);
-          ctx.lineTo(len * 0.5, tile * 0.05);
+          ctx.moveTo(-dx, -dy);
+          ctx.lineTo(dx, dy);
           ctx.stroke();
         }
       } else if (b.kind === "ring" || b.kind === "shockRing") {
         const tight = b.kind === "shockRing";
         const fade = Math.max(0, 1 - k);
-        if (fade > 0) {
-          const r = tile * (tight ? 0.3 + k * 0.9 : 0.4 + k * 1.5);
+        if (fade > 0.01) {
+          // Same real hex spacing as the arc above (neighbor centers ~1.73*tile out) — Sweep's
+          // ring needs to visibly wash out past the first ring of hexes, not stay pinned close
+          // to the caster's own tile.
+          const r = tile * (tight ? 0.35 + k * 1.05 : 0.55 + k * 2.05);
           ctx.translate(cx, cy);
           ctx.scale(1, tight ? 0.62 : 0.5);
-          ctx.strokeStyle = `rgba(222,236,255,${(tight ? 0.85 : 0.8) * fade})`;
-          ctx.lineWidth = tile * (tight ? 0.1 : 0.16) * (1 - k * 0.5);
-          ctx.shadowColor = "rgba(215,232,255,0.9)";
+          ctx.globalCompositeOperation = "source-over";
+          ctx.globalAlpha = fade;
+          ctx.strokeStyle = "rgba(10,14,22,0.75)";
+          ctx.lineWidth = tile * (tight ? 0.14 : 0.2) * (1 - k * 0.4);
+          ctx.beginPath();
+          ctx.arc(0, 0, r, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.strokeStyle = "rgba(255,255,255,0.95)";
+          ctx.lineWidth = tile * (tight ? 0.06 : 0.09) * (1 - k * 0.4);
+          ctx.beginPath();
+          ctx.arc(0, 0, r, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.globalCompositeOperation = "lighter";
+          ctx.strokeStyle = `rgba(205,228,255,${0.55 * fade})`;
+          ctx.lineWidth = tile * (tight ? 0.17 : 0.24);
+          ctx.shadowColor = "rgba(205,228,255,0.9)";
           ctx.shadowBlur = tile * 0.3;
           ctx.beginPath();
           ctx.arc(0, 0, r, 0, Math.PI * 2);
           ctx.stroke();
           if (tight) {
-            ctx.shadowBlur = 0;
-            ctx.strokeStyle = `rgba(255,255,255,${0.6 * fade})`;
-            ctx.lineWidth = tile * 0.035;
+            ctx.globalCompositeOperation = "source-over";
+            ctx.strokeStyle = `rgba(255,255,255,${0.5 * fade})`;
+            ctx.lineWidth = tile * 0.03;
             ctx.beginPath();
-            ctx.arc(0, 0, r * 0.72, 0, Math.PI * 2);
+            ctx.arc(0, 0, r * 0.68, 0, Math.PI * 2);
             ctx.stroke();
           }
         }
       } else if (b.kind === "dash") {
-        const travel = b.max * 0.6;
+        const travel = b.max * 0.55;
         const kHead = Math.min(1, b.t / travel);
         const fade = b.t < travel ? 1 : Math.max(0, 1 - (b.t - travel) / (b.max - travel));
-        if (fade > 0) {
+        if (fade > 0.01) {
           const to = this.hexCenter(b.toX, b.toY);
           const headX = cx + (to.cx - cx) * kHead;
           const headY = cy + (to.cy - cy) * kHead;
-          ctx.strokeStyle = `rgba(222,236,255,${0.85 * fade})`;
-          ctx.lineWidth = tile * 0.22;
-          ctx.shadowColor = "rgba(215,232,255,0.95)";
-          ctx.shadowBlur = tile * 0.3;
+          const dx = to.cx - cx;
+          const dy = to.cy - cy;
+          const len = Math.hypot(dx, dy) || 1;
+          const nx = -dy / len;
+          const ny = dx / len;
+
+          ctx.globalCompositeOperation = "source-over";
+          ctx.globalAlpha = fade;
+          ctx.strokeStyle = "rgba(10,14,22,0.85)";
+          ctx.lineWidth = tile * 0.16;
           ctx.beginPath();
           ctx.moveTo(cx, cy);
           ctx.lineTo(headX, headY);
           ctx.stroke();
-          ctx.shadowBlur = 0;
-          ctx.strokeStyle = `rgba(255,255,255,${0.95 * fade})`;
+          ctx.strokeStyle = "rgba(255,255,255,0.98)";
           ctx.lineWidth = tile * 0.07;
           ctx.beginPath();
           ctx.moveTo(cx, cy);
           ctx.lineTo(headX, headY);
           ctx.stroke();
+
+          ctx.globalCompositeOperation = "lighter";
+          ctx.strokeStyle = `rgba(205,228,255,${0.55 * fade})`;
+          ctx.lineWidth = tile * 0.3;
+          ctx.shadowColor = "rgba(205,228,255,0.9)";
+          ctx.shadowBlur = tile * 0.35;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(headX, headY);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+
+          ctx.globalCompositeOperation = "source-over";
+          for (let i = 0; i < 3; i++) {
+            const t2 = Math.max(0, kHead - i * 0.16);
+            const px = cx + dx * t2;
+            const py = cy + dy * t2;
+            const w = tile * (0.22 - i * 0.05);
+            ctx.strokeStyle = `rgba(255,255,255,${(0.5 - i * 0.14) * fade})`;
+            ctx.lineWidth = tile * 0.025;
+            ctx.beginPath();
+            ctx.moveTo(px - nx * w, py - ny * w);
+            ctx.lineTo(px + nx * w, py + ny * w);
+            ctx.stroke();
+          }
+
+          if (kHead < 1) {
+            const flash = ctx.createRadialGradient(headX, headY, 0, headX, headY, tile * 0.32);
+            flash.addColorStop(0, `rgba(255,255,255,${0.95 * fade})`);
+            flash.addColorStop(1, "rgba(255,255,255,0)");
+            ctx.globalCompositeOperation = "lighter";
+            ctx.fillStyle = flash;
+            ctx.beginPath();
+            ctx.arc(headX, headY, tile * 0.32, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
       ctx.restore();

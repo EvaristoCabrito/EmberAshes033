@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { BattleEngine } from "./engine";
+import { WEB_SHOT_TRAVEL, type BattleEngine } from "./engine";
 import { EffectsRenderer } from "./gfx/EffectsRenderer";
 import type { HudSnapshot } from "./types";
 
@@ -58,6 +58,12 @@ export function BattleCanvas({
         fxCanvas.style.display = "none";
       }
     }
+
+    // Dreaming Web's WebGL floor patch + travelling shot, unlike every other elemental FX
+    // here, are spawned/despawned live as the spell itself plays out rather than once at
+    // mount from an editor-authored placements list — see the sync inside loop() below.
+    const webFloorIds = new Map<string, number>();
+    let webShotId: number | null = null;
 
     let raf = 0;
     let last = performance.now();
@@ -151,9 +157,65 @@ export function BattleCanvas({
       }
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       engine.renderGround(ctx, wrap.clientWidth, wrap.clientHeight, dpr);
-      // Skip the whole FX pipeline (scene upload, light/effects/bloom FBO passes) whenever
-      // the map has no elemental placements, so an ordinary fight never pays for it.
       if (fx) {
+        // Dreaming Web's floor patch: one "web" WebGL effect per hex currently inside any live
+        // web zone, added/removed to track engine.webZones exactly — the only elemental FX kind
+        // whose placements change mid-battle instead of being fixed at mount. Only hexes the
+        // party has actually seen (explored: seen at least once and remembered, not just
+        // currently in sight) — otherwise the patch paints itself over fogged, unseen ground,
+        // which is what a camera pan into unexplored territory would reveal. The shot remains
+        // the cast tell: a zone's cells don't appear until WEB_SHOT_TRAVEL has actually elapsed
+        // since it was cast (see webZones' createdAt), so the floor patch shows up exactly when
+        // the travelling shot lands rather than popping in the instant the spell is cast.
+        const liveKeys = new Set<string>();
+        for (const zone of engine.webZones) {
+          if (zone.createdAt != null && engine.time < zone.createdAt + WEB_SHOT_TRAVEL) continue;
+          for (const k of zone.cells) {
+            const comma = k.indexOf(",");
+            const x = Number(k.slice(0, comma));
+            const y = Number(k.slice(comma + 1));
+            if (Number.isFinite(x) && Number.isFinite(y) && engine.explored(x, y)) liveKeys.add(k);
+          }
+        }
+        for (const k of liveKeys) {
+          if (webFloorIds.has(k)) continue;
+          const comma = k.indexOf(",");
+          const x = Number(k.slice(0, comma));
+          const y = Number(k.slice(comma + 1));
+          webFloorIds.set(k, fx.spawnEffect("web", x, y, { radiusTiles: 1.0 }));
+        }
+        for (const [k, id] of webFloorIds) {
+          if (!liveKeys.has(k)) {
+            fx.removeEffect(id);
+            webFloorIds.delete(k);
+          }
+        }
+        // Dreaming Web's shot: one "webShot" beam, repositioned every frame via updateOverride
+        // to follow the travelling missile's own timing (see BattleEngine.webShotBeam) — it
+        // can't use the fixed getAnchor(col,row) model every other effect here relies on.
+        const beam = engine.webShotBeam();
+        if (beam) {
+          if (webShotId === null) webShotId = fx.spawnEffect("webShot", 0, 0, { radiusTiles: 0.01 });
+          fx.updateOverride(webShotId, {
+            x: beam.x,
+            y: beam.y,
+            worldX: beam.worldX,
+            worldY: beam.worldY,
+            tile: beam.tile,
+            halfLengthPx: Math.max(1, beam.length / 2),
+            // Wide enough that the tangled multi-strand shader (see shaders.ts's WEB_SHOT,
+            // whose strands spread out to about |v_local.y| = 0.85 near the tail) actually
+            // reads as a comet-like cluster instead of a thin line.
+            halfWidthPx: beam.tile * 0.4,
+            rotation: beam.angle,
+          });
+        } else if (webShotId !== null) {
+          fx.removeEffect(webShotId);
+          webShotId = null;
+        }
+        // Skip the rest of the FX pipeline (scene upload, light/effects/bloom FBO passes)
+        // whenever nothing — editor-placed or live spell FX — is actually active, so an
+        // ordinary fight never pays for it.
         if (fx.hasEffects()) {
           if (fxCanvas) fxCanvas.style.display = "block";
           fx.render(canvas, dt, (col, row) => engine.effectAnchor(col, row));

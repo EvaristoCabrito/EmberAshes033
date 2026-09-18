@@ -1,10 +1,10 @@
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronUp, Dices, Grip, Pencil, RotateCcw, Shuffle, SlidersHorizontal, Swords, Volume2, VolumeX, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronUp, Dices, Grip, ListOrdered, Pencil, RotateCcw, Shuffle, SlidersHorizontal, Swords, Volume2, VolumeX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { loadGameArt, portraitFor, TILE_VARIANT_COUNT, tileVariantName, tileVariantSrc } from "./assets";
 import { getAudioVolumes, installAudioUnlock, playFile, playMenuMusic, playTheme, resumeAudio, setCutsceneVolume, setMusicVolume, setMuted, setSfxVolume, sfxPlay, stopMusic, unlockAudio } from "./audio";
 import { BattleCanvas } from "./BattleCanvas";
-import { ELEMENT_KINDS, ELEMENT_LABELS, type ElementKind } from "./gfx/params";
+import { ELEMENT_LABELS, PLACEABLE_ELEMENT_KINDS, type PlaceableElementKind } from "./gfx/params";
 import { InnScreen } from "./InnScreen";
 import { PartyInventoryOverlay, ItemTip } from "./InventoryScreens";
 import { DialogOverlay } from "./DialogOverlay";
@@ -3047,7 +3047,7 @@ function MapEditorScreen({
   const [versionStore, setVersionStore] = useState<Record<string, MapVersion[]>>(() => loadVersionStore());
   const [activeVersions, setActiveVersions] = useState<Record<string, number>>(() => loadActiveVersions());
   const [draft, setDraft] = useState<MapDraft>(() => initialDraft ?? blankDraft());
-  // Undo/redo for the map editor, up to 5 steps each way. A burst of rapid changes (typing
+  // Undo/redo for the map editor, up to 10 steps each way. A burst of rapid changes (typing
   // in a text field, dragging a paint stroke across several hexes) is coalesced into a
   // single step by waiting for a short pause before committing one to history, so undo
   // moves through whole edits instead of one keystroke or one hex at a time.
@@ -3072,7 +3072,7 @@ function MapEditorScreen({
       pendingBeforeRef.current = null;
       coalesceTimerRef.current = null;
       if (before === null) return;
-      setDraftPast((p) => [...p, before].slice(-5));
+      setDraftPast((p) => [...p, before].slice(-10));
       setDraftFuture([]);
     }, 600);
   }, [draft]);
@@ -3091,7 +3091,7 @@ function MapEditorScreen({
     }
     const prevState = draftPast[draftPast.length - 1]!;
     setDraftPast((p) => p.slice(0, -1));
-    setDraftFuture((f) => [draft, ...f].slice(0, 5));
+    setDraftFuture((f) => [draft, ...f].slice(0, 10));
     applyingHistoryRef.current = true;
     setDraft(prevState);
   }, [draft, draftPast]);
@@ -3104,7 +3104,7 @@ function MapEditorScreen({
     }
     const nextState = draftFuture[0]!;
     setDraftFuture((f) => f.slice(1));
-    setDraftPast((p) => [...p, draft].slice(-5));
+    setDraftPast((p) => [...p, draft].slice(-10));
     applyingHistoryRef.current = true;
     setDraft(nextState);
   }, [draft, draftFuture]);
@@ -3117,7 +3117,7 @@ function MapEditorScreen({
   // A placed prop is selected by clicking any hex of its footprint; Delete removes this exact placement.
   const [selectedPlacedDecoration, setSelectedPlacedDecoration] = useState<{ id: string; x: number; y: number; rot?: number } | null>(null);
   const [decoSection, setDecoSection] = useState("Todas");
-  const [fxBrush, setFxBrush] = useState<ElementKind>("fire");
+  const [fxBrush, setFxBrush] = useState<PlaceableElementKind>("fire");
   const [mode, setMode] = useState<"paint" | "player" | "enemy" | "summon" | "decoration" | "elementalFx">("paint");
   // Which summon class the "Invocação" brush drops. Summons live in playerSpawns alongside
   // the heroes — the class itself says which of the two a spawn is (isSummonClass), so
@@ -4720,7 +4720,7 @@ function MapEditorScreen({
               assim que a batalha carrega, e continua a batalha inteira.
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {ELEMENT_KINDS.map((k) => (
+              {PLACEABLE_ELEMENT_KINDS.map((k) => (
                 <button
                   key={k}
                   type="button"
@@ -5653,6 +5653,9 @@ function BattleScreen({
   // — the same numbers the map editor shows on hover, which the player had no way to see
   // during a fight.
   const [heldTile, setHeldTile] = useState(false);
+  // Turn order bar: visible by default, but a battle with a long roster can eat a lot of the
+  // top of the screen — tapping it collapses to a small reopen icon in the same spot.
+  const [showTurnOrder, setShowTurnOrder] = useState(true);
   const [hotbars, setHotbars] = useState<Record<string, (SlotAction | null)[]>>({});
   const [editingSlots, setEditingSlots] = useState(false);
   const [pickerSlot, setPickerSlot] = useState<number | null>(null);
@@ -5932,30 +5935,47 @@ function BattleScreen({
           paused={paused || introDialogOpen || outroDialogOpen || !!hud.pendingDialog}
           onTileReadout={setHeldTile}
         />
-        {hud.turnQueue.length > 1 && (
-          <div className="pointer-events-none absolute inset-x-2 top-[max(0.5rem,env(safe-area-inset-top))] flex items-center gap-1 flex-wrap">
-            <p className="bg-surface/90 border border-border rounded-md px-2 py-0.5 text-[15px] leading-tight flex items-center gap-1.5 flex-wrap">
-              {hud.turnQueue.map((q, i) => (
-                <span key={q.id} className="flex items-center gap-2">
-                  {i > 0 && <span className="text-muted">→</span>}
-                  <span
-                    className={
-                      q.active
-                        ? "text-accent font-medium"
-                        : q.acted
-                          ? "text-muted line-through"
-                          : q.side === "enemy"
-                            ? "text-danger"
-                            : "text-fg"
-                    }
-                  >
-                    {q.name} · {q.initiative}
+        {hud.turnQueue.length > 1 &&
+          (showTurnOrder ? (
+            <div className="pointer-events-none absolute inset-x-2 top-[max(0.5rem,env(safe-area-inset-top))] flex items-center gap-1 flex-wrap">
+              <button
+                type="button"
+                title="Ocultar ordem de turnos"
+                onClick={() => setShowTurnOrder(false)}
+                className="pointer-events-auto bg-surface/90 border border-border rounded-md px-2 py-0.5 text-[15px] leading-tight flex items-center gap-1.5 flex-wrap hover:bg-surface-2"
+              >
+                {hud.turnQueue.map((q, i) => (
+                  <span key={q.id} className="flex items-center gap-2">
+                    {i > 0 && <span className="text-muted">→</span>}
+                    <span
+                      className={
+                        q.active
+                          ? "text-accent font-medium"
+                          : q.acted
+                            ? "text-muted line-through"
+                            : q.side === "enemy"
+                              ? "text-danger"
+                              : "text-fg"
+                      }
+                    >
+                      {q.name} · {q.initiative}
+                    </span>
                   </span>
-                </span>
-              ))}
-            </p>
-          </div>
-        )}
+                ))}
+              </button>
+            </div>
+          ) : (
+            <div className="pointer-events-none absolute inset-x-2 top-[max(0.5rem,env(safe-area-inset-top))] flex items-center">
+              <button
+                type="button"
+                title="Mostrar ordem de turnos"
+                onClick={() => setShowTurnOrder(true)}
+                className="pointer-events-auto bg-surface/90 border border-border rounded-md p-1.5 hover:bg-surface-2"
+              >
+                <ListOrdered className="size-4" />
+              </button>
+            </div>
+          ))}
         {heldTile && hud.terrain && (
           <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center px-3">
             <div className="bg-surface/95 border border-border rounded-lg px-3 py-2 max-w-sm shadow-lg">

@@ -318,7 +318,15 @@ function footprintCost(
   stop: boolean,
   overlay: DecorOverlay = EMPTY_OVERLAY,
 ): number | null {
-  const cells = footprint({ x, y, size });
+  // self's real shape, not a bare {x,y,size} — that would drop footprintOffsets/footprintW/
+  // footprintH entirely (they're not part of this literal), silently falling back to
+  // footprint()'s generic 2x4-rectangle default for every size>=4 creature. That default
+  // rectangle doesn't match the true silhouette the occupancy map (occ, built from each
+  // unit's own real footprint() call) was populated with, so a custom-shaped mover — Troll,
+  // Horror, Asherah, Ancient Golem, anything on FOOTPRINT_TYPE_7/8 — was checking the wrong
+  // cells for both terrain passability and collision, which reads as "randomly stuck" (some
+  // moves wrongly blocked, some real blockers wrongly missed) rather than a clean failure.
+  const cells = footprint({ x, y, size, footprintW: self.footprintW, footprintH: self.footprintH, footprintOffsets: self.footprintOffsets });
   let cost = 1;
   for (const p of cells) {
     if (!inBounds(p.x, p.y, cols, rows)) return null;

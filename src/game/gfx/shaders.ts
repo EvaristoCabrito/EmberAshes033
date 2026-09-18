@@ -26,6 +26,8 @@ export const ELEMENT_INDEX: Record<string, number> = {
   water3: 10,
   water4: 11,
   water5: 12,
+  web: 13,
+  webShot: 14,
 };
 
 const VERSION = "#version 300 es\n";
@@ -56,14 +58,22 @@ void main() {
   v_local = a_pos;
   float c = cos(u_rotation);
   float s = sin(u_rotation);
-  vec2 rotated = vec2(a_pos.x * c - a_pos.y * s, a_pos.x * s + a_pos.y * c);
-  vec2 pixelPos = u_center + rotated * u_radius;
+  // Scale in LOCAL space first (rx along local x, ry along local y), THEN rotate the already-
+  // oriented offset — not the other way around. Rotating the unit quad and only afterward
+  // multiplying by (rx, ry) (the old code) scales along the fixed screen axes instead of the
+  // shape's own rotated length/width axes, which is invisible for a uniform radius or a
+  // 0/90°-only rotation (every effect before Dreaming Web's shot) but visibly wrong — a
+  // squashed, misoriented blob — for any effect combining a non-uniform radius with an
+  // arbitrary rotation angle, exactly what a travelling oriented beam needs.
+  vec2 scaled = a_pos * u_radius;
+  vec2 offset = vec2(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
+  vec2 pixelPos = u_center + offset;
   vec2 zeroOne = pixelPos / u_resolution;
   vec2 clip = zeroOne * 2.0 - 1.0;
   clip.y = -clip.y;
   gl_Position = vec4(clip, 0.0, 1.0);
   v_uv = vec2(zeroOne.x, 1.0 - zeroOne.y);
-  v_world = u_worldCenter + rotated * u_radius;
+  v_world = u_worldCenter + offset;
 }
 `;
 
@@ -217,6 +227,31 @@ vec3 naturalShoreSurface(float waveFreq, float waveAmp, float roughFreq, float r
 }
 `;
 
+// Dreaming Web's floor patch: a symmetric orb-web of radial spokes + concentric rings, rebuilt
+// as a distance-to-nearest-strand field so relief() below can turn it into an actual raised,
+// glossy silk surface instead of flat colored lines. The rings sag inward at the midpoint
+// between spokes (the `sway` term), same as a real orb web's slack thread pulled taut only
+// where it meets a spoke.
+const WEB_SURFACE = `
+float webStrandDist(vec2 p) {
+  float r = length(p);
+  float angle = atan(p.y, p.x);
+  const float SPOKES = 8.0;
+  const float TWO_PI = 6.28318530718;
+  float sector = TWO_PI / SPOKES;
+  float aWrapped = mod(angle + sector * 0.5, sector) - sector * 0.5;
+  float spokeDist = r * abs(sin(aWrapped));
+  float sway = sin(abs(aWrapped) / (sector * 0.5) * 3.14159265);
+  float ringDist = 1.0e3;
+  for (int i = 1; i <= 5; i++) {
+    float baseR = float(i) * 0.19;
+    float ringR = baseR * mix(1.0, 0.84, sway);
+    ringDist = min(ringDist, abs(r - ringR));
+  }
+  return min(spokeDist, ringDist);
+}
+`;
+
 // ---------------------------------------------------------------------------
 // Master elemental "visual quad" shader — handles all 7 elements.
 // ---------------------------------------------------------------------------
@@ -242,6 +277,7 @@ ${SHADING}
 ${HEX_SHAPE}
 ${WATER_SURFACE}
 ${NATURAL_SHORE_SURFACE}
+${WEB_SURFACE}
 ${ICE_CELLS}
 
 const int FIRE = 0;
@@ -257,6 +293,8 @@ const int WATER2 = 9;
 const int WATER3 = 10;
 const int WATER4 = 11;
 const int WATER5 = 12;
+const int WEB = 13;
+const int WEB_SHOT = 14;
 
 void main() {
   vec2 uv = v_local * 0.5 + 0.5;
@@ -503,11 +541,69 @@ void main() {
     fragColor = vec4(col, alpha);
     return;
   }
-  // WATER5 — Bay Shore: low frequency, large amplitude — big, slow, sweeping bay-scale
-  // curves, almost no fine roughness.
-  float alpha;
-  vec3 col = naturalShoreSurface(0.05, 0.85, 0.3, 0.06, 0.08, alpha);
-  fragColor = vec4(col, alpha);
+  if (u_element == WATER5) {
+    // Bay Shore: low frequency, large amplitude — big, slow, sweeping bay-scale curves,
+    // almost no fine roughness.
+    float alpha;
+    vec3 col = naturalShoreSurface(0.05, 0.85, 0.3, 0.06, 0.08, alpha);
+    fragColor = vec4(col, alpha);
+    return;
+  }
+
+  if (u_element == WEB) {
+    // The persistent Dreaming Web zone floor — a woven orb-web sitting on the ground for the
+    // whole zone's duration. A slow breathing pulse (the web very slightly swelling/relaxing)
+    // plus a glint that sweeps outward from the center over time sell it as a living, lit
+    // surface rather than a static decal painted on the tile.
+    //
+    // Both edges here are anti-aliased with fwidth() rather than a hard cutoff: webStrandDist
+    // buckets nothing (it's a smooth continuous field, no per-cell hash), but a THIN line or
+    // silhouette edge sampled with a fixed-width smoothstep still aliases/shimmers as the quad
+    // slides under the pixel grid during a camera pan — fwidth(...) is the field's own
+    // screen-space rate of change, so widening the smoothstep by it keeps each edge covering a
+    // stable ~1-2 screen pixels regardless of how fast it's moving, instead of it randomly
+    // falling between samples frame to frame.
+    float aaHex = fwidth(d);
+    float hexMask = smoothstep(1.0 + aaHex, 1.0 - aaHex, d);
+    if (hexMask <= 0.0) discard;
+    float breathe = 1.0 + 0.03 * sin(u_time * 0.6 + u_seed * 4.0);
+    float strandDist = webStrandDist(v_local * breathe) / breathe;
+    float threadWidth = max(0.03 + 0.01 * sampleFbm(v_local * 3.0 + u_seed), fwidth(strandDist) * 1.5);
+    float mask = (1.0 - smoothstep(0.0, threadWidth, strandDist)) * hexMask;
+    float glintPhase = fract(u_time * 0.15 + u_seed * 0.37);
+    float glintDist = abs(fract(rad * 1.6 - glintPhase * 2.0 + 0.5) - 0.5);
+    float glint = smoothstep(0.12, 0.0, glintDist) * mask;
+    vec3 base = relief(mask * 2.4, 7.0, u_color * 0.9, 26.0, 0.65, 0.35);
+    vec3 col = base + vec3(1.0, 0.95, 1.0) * glint * 0.6;
+    float alpha = clamp(mask * u_intensity, 0.0, 1.0);
+    fragColor = vec4(col * alpha, alpha);
+    return;
+  }
+
+  // WEB_SHOT — the travelling shot: per the reference photo, a dense tangled knot of silk at
+  // the head (v_local.x near +1, the current leading edge, always fixed by
+  // BattleEngine.webShotBeam/the BattleCanvas override) fraying into loose wispy strands
+  // trailing back toward the tail (v_local.x near -1, the caster's end) — a comet of silk, not
+  // one clean line. A pulse of light courses toward the head so the shot visibly carries
+  // momentum.
+  float minStrand = 1.0e3;
+  for (int i = 0; i < 9; i++) {
+    float phase = float(i) / 8.0 * 2.0 - 1.0;
+    // Each strand spreads apart toward the tail and converges toward the head, with a
+    // sinusoidal wobble so they read as loose tangled threads rather than dead-straight wires.
+    float spread = mix(0.85, 0.06, smoothstep(-1.0, 0.7, v_local.x));
+    float wobble = sin(v_local.x * 6.0 + phase * 6.2831 + u_seed + float(i)) * 0.12 * spread;
+    minStrand = min(minStrand, abs(v_local.y - (phase * spread + wobble)));
+  }
+  float strandMask = 1.0 - smoothstep(0.0, 0.05, minStrand);
+  float knotNoise = sampleFbm(v_local * 6.0 + u_time * 0.4 + u_seed);
+  float knot = smoothstep(0.32, 0.0, length(v_local - vec2(0.8, 0.0))) * smoothstep(0.25, 0.7, knotNoise + 0.3);
+  float mask = clamp(strandMask + knot, 0.0, 1.0) * smoothstep(-1.0, -0.72, v_local.x);
+  float pulse = smoothstep(0.4, 0.0, abs(fract(v_local.x * 1.2 - u_time * 2.4) - 0.5));
+  vec3 baseShot = relief(mask * 2.6, 9.0, u_color, 34.0, 0.9, 0.28);
+  vec3 colShot = baseShot + vec3(1.0) * knot * 0.55 + vec3(1.0) * pulse * mask * 0.25;
+  float alphaShot = clamp(mask * u_intensity, 0.0, 1.0);
+  fragColor = vec4(colShot * alphaShot, alphaShot);
 }
 `;
 
@@ -549,6 +645,12 @@ void main() {
   }
   if (u_element == 5) { // holy: soft wide glow feeding the bloom pass
     float alpha = atten * u_intensity;
+    fragColor = vec4(hotCore * alpha, alpha);
+    return;
+  }
+  if (u_element == 14) { // webShot: a travelling violet glow, pulsing with the shot's own energy
+    float pulse = 0.75 + 0.25 * sin(u_time * 5.0 + u_seed * 8.0);
+    float alpha = atten * u_intensity * pulse;
     fragColor = vec4(hotCore * alpha, alpha);
     return;
   }

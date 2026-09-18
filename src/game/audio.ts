@@ -315,10 +315,26 @@ export const sfxPlay = {
     setTimeout(() => beep(466, 0.24, "triangle", 0.16, -86), 72);
     setTimeout(() => beep(622, 0.3, "sine", 0.12, -164), 146);
   },
+  /** Summon Familiar's conjuring circle: a low swirling whoosh as the portal opens, rising
+   * into a bright chime right as the familiar steps through (see BattleEngine.emitPortalFx). */
+  summonFamiliar: () => {
+    noise(0.3, 0.1);
+    beep(180, 0.35, "sine", 0.14, 260);
+    setTimeout(() => beep(300, 0.3, "triangle", 0.13, 180), 90);
+    setTimeout(() => beep(560, 0.18, "sine", 0.15, 60), 260);
+    setTimeout(() => beep(840, 0.22, "triangle", 0.12, 40), 320);
+  },
   meleeAttack: () => {
     noise(0.075, 0.2);
     beep(176, 0.12, "sawtooth", 0.19, 138);
   },
+  // Cultist V2's own authored cues (see attachments/Cultist-V2), one per animation set —
+  // played instead of the generic magicAttack/spell/move beeps whenever the acting unit's
+  // sprite is "cultist-v2" (see stepCombat/stepSpell/startSeq in engine.ts).
+  cultistV2Attack: () => playSfxFile("CultistV2Attack.mp3", 0.55),
+  cultistV2Spellcast: () => playSfxFile("CultistV2Spellcast.mp3", 0.55),
+  cultistV2WalkLeft: () => playSfxFile("CultistV2WalkLeft.mp3", 0.45),
+  cultistV2WalkRight: () => playSfxFile("CultistV2WalkRight.mp3", 0.45),
   arrowAttack: () => {
     beep(740, 0.055, "triangle", 0.17, -250);
     setTimeout(() => beep(260, 0.11, "sine", 0.12, -92), 18);
