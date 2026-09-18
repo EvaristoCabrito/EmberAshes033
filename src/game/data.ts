@@ -120,6 +120,16 @@ const DECO_ROW_TRIO = [{ dx: 0, dy: 0 }, { dx: 1, dy: 0 }, { dx: 2, dy: 0 }];
 const DECO_ROW_FIVE = [{ dx: 0, dy: 0 }, { dx: 1, dy: 0 }, { dx: 2, dy: 0 }, { dx: 3, dy: 0 }, { dx: 4, dy: 0 }];
 const DECO_QUAD = [{ dx: 0, dy: 0 }, { dx: 1, dy: 0 }, { dx: 2, dy: 0 }, { dx: 3, dy: 0 }];
 const DECO_ONE = [{ dx: 0, dy: 0 }];
+// A compact 5-hex block (a 2-wide front row plus a 3-wide row behind it) rather than a
+// straight line — this is the footprint for the big house/mansion decorations, and a
+// building reads as a building in that squarish arrangement, not as a row of tiles.
+const DECO_BLOCK_5 = [
+  { dx: 0, dy: 0 },
+  { dx: 1, dy: 0 },
+  { dx: -1, dy: -1 },
+  { dx: 0, dy: -1 },
+  { dx: 1, dy: -1 },
+];
 // A genuine 3x3 block (three rows, three columns) rather than a single row — a linear
 // footprint collapses vertical spread to 0, which stretches a roughly-square image (like a
 // wide ancestral tree) into a flat, deformed strip. Spreading it across both axes keeps the
@@ -314,10 +324,10 @@ export const DECORATIONS: Record<string, DecorationDef> = {
   "dense-forest": { id: "dense-forest", name: "Bosque Denso", footprint: DECO_PAIR, tile: "woods" },
   "broken-cliff-wall": { id: "broken-cliff-wall", name: "Muralha Rochosa Partida", footprint: DECO_PAIR, tile: "column", repeatGroup: "broken-cliff-wall" },
   "boulder-cluster": { id: "boulder-cluster", name: "Amontoado de Pedras", footprint: DECO_TRIO, tile: "column" },
-  "ruined-cottage": { id: "ruined-cottage", name: "Casa em Ruínas", footprint: DECO_PAIR },
+  "ruined-cottage": { id: "ruined-cottage", name: "Casa em Ruínas", footprint: DECO_TRIO },
   "broken-tower": { id: "broken-tower", name: "Torre Derrubada", footprint: DECO_PAIR },
   "ruined-chapel": { id: "ruined-chapel", name: "Capela em Ruínas", footprint: DECO_PAIR },
-  "abandoned-mansion": { id: "abandoned-mansion", name: "Mansão Abandonada", footprint: DECO_TRIO },
+  "abandoned-mansion": { id: "abandoned-mansion", name: "Mansão Abandonada", footprint: DECO_BLOCK_5 },
   "stone-bridge": { id: "stone-bridge", name: "Ponte de Pedra", footprint: DECO_PAIR },
   // Long, repeatable transparent modules for the two outer edges of a bridge map.
   "bridge-parapet-gothic-statues-001": { id: "bridge-parapet-gothic-statues-001", name: "Parapeito Gótico — Estátuas", footprint: DECO_QUAD, foreground: true, unitLayer: "front", repeatGroup: "bridge-parapet-gothic-statues" },
@@ -340,14 +350,14 @@ export const DECORATIONS: Record<string, DecorationDef> = {
   "barricade-2": { id: "barricade-2", name: "Barricada 2", footprint: DECO_ONE, tile: "barricade" },
   "dead-tree": { id: "dead-tree", name: "Árvore morta", footprint: DECO_ONE },
   "fallen-log": { id: "fallen-log", name: "Tronco caído", footprint: DECO_PAIR },
-  "small-house": { id: "small-house", name: "Casa pequena", footprint: DECO_ONE },
-  "stone-hut": { id: "stone-hut", name: "Cabana de pedra", footprint: DECO_ONE },
+  "small-house": { id: "small-house", name: "Casa pequena", footprint: DECO_TRIO },
+  "stone-hut": { id: "stone-hut", name: "Cabana de pedra", footprint: DECO_TRIO },
   "rocky-outcrop": { id: "rocky-outcrop", name: "Afloramento Rochoso", footprint: DECO_PAIR, tile: "column" },
   "boulder-pile": { id: "boulder-pile", name: "Pilha de Pedras", footprint: DECO_PAIR, tile: "column" },
   "twin-spires": { id: "twin-spires", name: "Torres Gêmeas de Pedra", footprint: DECO_PAIR, tile: "column" },
   "large-boulder": { id: "large-boulder", name: "Pedregulho Grande", footprint: DECO_ONE, tile: "column" },
-  "burning-house": { id: "burning-house", name: "Casa em Chamas", footprint: DECO_ONE },
-  "burnt-house-ruins": { id: "burnt-house-ruins", name: "Ruínas Queimadas", footprint: DECO_ONE },
+  "burning-house": { id: "burning-house", name: "Casa em Chamas", footprint: DECO_TRIO },
+  "burnt-house-ruins": { id: "burnt-house-ruins", name: "Ruínas Queimadas", footprint: DECO_TRIO },
   well: { id: "well", name: "Poço", footprint: DECO_ONE },
   "stone-fountain": { id: "stone-fountain", name: "Fonte de Pedra", footprint: DECO_ONE },
   tombstones: { id: "tombstones", name: "Lápides", footprint: DECO_ONE },
@@ -372,6 +382,15 @@ export const DECORATIONS: Record<string, DecorationDef> = {
  * same way (BattleEngine.useLockpick/adjacentLock) — callers that need "is this a chest"
  * check membership here instead of one hardcoded id. */
 export const CHEST_DECOR_IDS = new Set(["locked-chest", "chest-medium", "chest-large"]);
+
+/** Small single-building house props — a 3-hex footprint (DECO_TRIO), drawn at the shared
+ * "house" art scale in BattleEngine.drawDecorations. Kept separate from BIG_HOUSE_DECOR_IDS
+ * so the renderer can size the mansion's larger 5-hex footprint on its own. */
+export const HOUSE_DECOR_IDS = new Set(["small-house", "stone-hut", "burning-house", "burnt-house-ruins", "ruined-cottage"]);
+
+/** The one big-house prop (a mansion) — a 5-hex footprint (DECO_BLOCK_5), same 3x art scale
+ * as HOUSE_DECOR_IDS but sized for its wider footprint. */
+export const BIG_HOUSE_DECOR_IDS = new Set(["abandoned-mansion"]);
 
 /** City props that read as a barricade/wall and should block like one — impassable, blocks
  * shots — without repainting the hex underneath to barricade terrain (that would replace

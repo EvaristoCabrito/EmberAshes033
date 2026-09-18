@@ -1,4 +1,4 @@
-import { CAUSTIC_VENOM, CHEST_DECOR_IDS, CHEST_LOOT, CLASSES, CLEAVE, cleaveDoublesVs, cleaveFormula, cleavePower, CURE_DISEASE, CURES, DECORATIONS, DISEASE, DOUBLE_STRIKE, doubleStrikeFormula, doubleStrikePower, EMPTY_BAG, EQUIPMENT, EXP_TO_LEVEL, expForHit, FIREBALL, FOOTPRINT_TYPE_7, FOOTPRINT_TYPE_8, formatSpellUseGains, HIGH_GROUND_LIFT, KILL_DROP_CHANCE, LIGHTNING, LIGHTNING_T3, LONG_SHOT, longShotFormula, longShotPower, MAGIC_MISSILE, magicMissileCount, MAX_LEVEL, PIERCING, piercingMul, PIERCING_THRUST, POTION_CARRY_MAX, POTIONS, RATIONS_ICON, SHOCK, SUMMON_FAMILIAR, SWEEP, TRIP, WEAPON_MAX_ENH, WEAPONS, WEB_OF_DREAMS, healFormula, barricadeDecor, decorationCells, decorationFacing, decorationImage, diceFormula, effectiveMaxRange, enemyLevelFor, equipmentIcon, fireballFormula, fireballOrigin, fireballPower, fireballRangeTiles, fireballTiles, hexAreaTiles, isProjectile, isSummonClass, isBossClass, lightningDice, lightningFormula, lightningTier3Formula, parseLayout, placedFootprint, potionLabel, rollCure, rollDice, rollPotion, shockChargesFor, spellFormula, spellTier, spellUseGains, starterWeaponFor, STARTING_BAG, statsFor, terrainNote, TERRAIN, tierKey, tierUses, gearStatBonus, offHandBlocked, equipmentFitsSlot, equipmentSlotName, equipmentTooltip, weaponTooltip, potionTooltip, weaponIcon, weaponRoll, weightedLootPick, weightedPotionPick, weightedWeaponPick, MULTI_SHOT, multiShotFormula, multiShotPower, multiShotTargets, SECOND_WIND, secondWindPct, auraPower, AURA_OF_PROTECTION, INTIMIDATING_PRESENCE, DIVINE_WRATH, divineWrathFormula, divineWrathPower, SHOULDER_SMASH, shoulderSmashFormula, shoulderSmashPower, SIGHT_RADIUS, STAMPEDE, stampedeFormula, stampedePower, cultistSpellUses, brigandSpellUses, birolhoSpellUses, webOfDreamsSize } from "./data";
+import { BIG_HOUSE_DECOR_IDS, CAUSTIC_VENOM, CHEST_DECOR_IDS, CHEST_LOOT, CLASSES, CLEAVE, cleaveDoublesVs, cleaveFormula, cleavePower, CURE_DISEASE, CURES, DECORATIONS, DISEASE, DOUBLE_STRIKE, doubleStrikeFormula, doubleStrikePower, EMPTY_BAG, EQUIPMENT, EXP_TO_LEVEL, expForHit, FIREBALL, FOOTPRINT_TYPE_7, FOOTPRINT_TYPE_8, formatSpellUseGains, HIGH_GROUND_LIFT, HOUSE_DECOR_IDS, KILL_DROP_CHANCE, LIGHTNING, LIGHTNING_T3, LONG_SHOT, longShotFormula, longShotPower, MAGIC_MISSILE, magicMissileCount, MAX_LEVEL, PIERCING, piercingMul, PIERCING_THRUST, POTION_CARRY_MAX, POTIONS, RATIONS_ICON, SHOCK, SUMMON_FAMILIAR, SWEEP, TRIP, WEAPON_MAX_ENH, WEAPONS, WEB_OF_DREAMS, healFormula, barricadeDecor, decorationCells, decorationFacing, decorationImage, diceFormula, effectiveMaxRange, enemyLevelFor, equipmentIcon, fireballFormula, fireballOrigin, fireballPower, fireballRangeTiles, fireballTiles, hexAreaTiles, isProjectile, isSummonClass, isBossClass, lightningDice, lightningFormula, lightningTier3Formula, parseLayout, placedFootprint, potionLabel, rollCure, rollDice, rollPotion, shockChargesFor, spellFormula, spellTier, spellUseGains, starterWeaponFor, STARTING_BAG, statsFor, terrainNote, TERRAIN, tierKey, tierUses, gearStatBonus, offHandBlocked, equipmentFitsSlot, equipmentSlotName, equipmentTooltip, weaponTooltip, potionTooltip, weaponIcon, weaponRoll, weightedLootPick, weightedPotionPick, weightedWeaponPick, MULTI_SHOT, multiShotFormula, multiShotPower, multiShotTargets, SECOND_WIND, secondWindPct, auraPower, AURA_OF_PROTECTION, INTIMIDATING_PRESENCE, DIVINE_WRATH, divineWrathFormula, divineWrathPower, SHOULDER_SMASH, shoulderSmashFormula, shoulderSmashPower, SIGHT_RADIUS, STAMPEDE, stampedeFormula, stampedePower, cultistSpellUses, brigandSpellUses, birolhoSpellUses, webOfDreamsSize } from "./data";
 import type { SpellTier } from "./data";
 import { canCounter, makeForecast, mulberry32, powerOf, protOf, rollDamage, rollDamageCustom } from "./combat";
 import {
@@ -6230,15 +6230,19 @@ export class BattleEngine {
       const tree = p.id === "dead-tree";
       const log = p.id === "fallen-log";
       const wall = p.id === "barricade" || p.id === "barricade-2";
-      const house = p.id === "small-house" || p.id === "stone-hut";
+      // Small single-building houses and the one big-house mansion share the same 3x
+      // "house" art scale (per user request); only their footprints (3 hexes vs 5) differ.
+      const house = HOUSE_DECOR_IDS.has(p.id);
+      const bigHouse = BIG_HOUSE_DECOR_IDS.has(p.id);
+      const anyHouse = house || bigHouse;
       const w = tree
         ? tile * 1.28
         : log
           ? tile * SQRT3 * 2.05
           : wall
             ? tile * 1.42
-            : house
-              ? tile * 1.45
+            : anyHouse
+              ? tile * 1.45 * 3
               : item
                 ? tile * 0.92
                 : one
@@ -6250,8 +6254,8 @@ export class BattleEngine {
           ? tile * 0.82
           : wall
             ? tile * 1.18
-            : house
-              ? tile * 1.58
+            : anyHouse
+              ? tile * 1.58 * 3
               : item
                 ? tile * 0.72
                 : one
@@ -6260,7 +6264,7 @@ export class BattleEngine {
       const h = baseH * (def.heightScale ?? 1);
       // Taller near-side props rise upward from their ground anchor instead of stretching
       // equally in both directions. That preserves the shallow isometric perspective.
-      const dy = (tree ? -tile * 0.55 : wall ? -tile * 0.12 : house ? -tile * 0.28 : item ? tile * 0.08 : 0) - (h - baseH) * 0.42;
+      const dy = (tree ? -tile * 0.55 : wall ? -tile * 0.12 : anyHouse ? -tile * 0.28 * 3 : item ? tile * 0.08 : 0) - (h - baseH) * 0.42;
       // Cull on the box actually drawn, which is why this sits after the sizing above and
       // not up by the centre. Every branch below centres the image on `(cx, cy + dy)`, so
       // one bounding circle bounds the turned cases as well as the straight one.
@@ -6770,8 +6774,9 @@ export class BattleEngine {
     // Persistent Web of Dreams belongs to the terrain stack. Do not move this below any
     // decoration, targeting overlay, unit shadow or unit sprite.
     this.drawWebFloorMarks(ctx, tile, cssW, cssH);
-    this.drawDecorations(ctx, tile, cssW, cssH);
-
+    // Ground/behind decorations are drawn in renderUnitsAndOverlays instead of here, so they
+    // land on the units canvas — stacked above the WebGL elemental FX canvas sitting in
+    // between this canvas and that one (see BattleCanvas) — rather than being hidden under it.
 
     // Every selectable area (walkable ground, spell range, an aimed AoE) gets the same
     // treatment: a soft colored glow plus a bright rim, on top of the flat fill — the flat
@@ -6957,45 +6962,6 @@ export class BattleEngine {
       ctx.restore();
     }
 
-    const cur = this.hover ?? this.cursor;
-    {
-      const { cx, cy } = this.hexCenter(cur.x, cur.y);
-      const hid = tileAt(this.tiles, this.cols, cur.x, cur.y);
-      const ht = TERRAIN[hid];
-      const blocked = !ht.passable;
-      if (blocked) {
-        ctx.save();
-        ctx.shadowColor = "rgba(219,58,44,0.95)";
-        ctx.shadowBlur = tile * 0.55;
-        ctx.strokeStyle = "rgba(255,90,72,0.95)";
-        ctx.lineWidth = 3;
-        this.hexPath(ctx, cx, cy, tile * 0.9);
-        ctx.stroke();
-        ctx.restore();
-      } else {
-        ctx.strokeStyle = "rgba(240,235,227,0.9)";
-        ctx.lineWidth = 2;
-        this.hexPath(ctx, cx, cy, tile * 0.9);
-        ctx.stroke();
-      }
-      if (blocked || ht.height) {
-        const label = blocked ? ht.name.toUpperCase() : "ALTO +2";
-        const fontPx = Math.max(11, Math.round(tile * 0.32));
-        ctx.font = `700 ${fontPx}px Figtree, sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.lineJoin = "round";
-        ctx.lineWidth = Math.max(3, fontPx * 0.22);
-        ctx.strokeStyle = "rgba(12,11,10,0.88)";
-        ctx.fillStyle = blocked ? "#ff7a68" : "#efe4c4";
-        ctx.strokeText(label, cx, cy + tile * 0.38);
-        ctx.fillText(label, cx, cy + tile * 0.38);
-      }
-    }
-
-    // A rear parapet must remain visible over the ground and tactical highlights, while
-    // character sprites still pass in front of it.
-    this.drawDecorations(ctx, tile, cssW, cssH, "behind");
     if (shake) ctx.restore();
   }
 
@@ -7011,6 +6977,14 @@ export class BattleEngine {
       ctx.save();
       ctx.translate(this.frameShakeDx, this.frameShakeDy);
     }
+
+    // Ground decorations (trees, houses, rocks...) draw here, above the WebGL elemental FX
+    // canvas but below character sprites — the same relative order as when this used to
+    // happen in renderGround, just moved onto this (topmost) canvas so FX never covers them.
+    this.drawDecorations(ctx, tile, cssW, cssH);
+    // A rear parapet must remain visible over the ground and tactical highlights, while
+    // character sprites still pass in front of it.
+    this.drawDecorations(ctx, tile, cssW, cssH, "behind");
 
     const cell = tile * sqrt3;
     const sorted = [...this.units].sort((a, b) => a.drawY - b.drawY || a.drawX - b.drawX);
@@ -7740,6 +7714,45 @@ export class BattleEngine {
     // Foreground parapets are the nearest scenery: no unit, HP bar, projectile, or spell
     // effect that is physically behind their artwork may show through.
     this.drawDecorations(ctx, tile, cssW, cssH, "front");
+
+    // The mouse-selection hex outline is drawn last, on this (topmost) canvas rather than
+    // in renderGround, so it always reads above the WebGL water FX layer stacked in between
+    // the ground and units canvases (see BattleCanvas) instead of being hidden under it.
+    const cur = this.hover ?? this.cursor;
+    {
+      const { cx, cy } = this.hexCenter(cur.x, cur.y);
+      const hid = tileAt(this.tiles, this.cols, cur.x, cur.y);
+      const ht = TERRAIN[hid];
+      const blocked = !ht.passable;
+      if (blocked) {
+        ctx.save();
+        ctx.shadowColor = "rgba(219,58,44,0.95)";
+        ctx.shadowBlur = tile * 0.55;
+        ctx.strokeStyle = "rgba(255,90,72,0.95)";
+        ctx.lineWidth = 3;
+        this.hexPath(ctx, cx, cy, tile * 0.9);
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        ctx.strokeStyle = "rgba(240,235,227,0.9)";
+        ctx.lineWidth = 2;
+        this.hexPath(ctx, cx, cy, tile * 0.9);
+        ctx.stroke();
+      }
+      if (blocked || ht.height) {
+        const label = blocked ? ht.name.toUpperCase() : "ALTO +2";
+        const fontPx = Math.max(11, Math.round(tile * 0.32));
+        ctx.font = `700 ${fontPx}px Figtree, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = Math.max(3, fontPx * 0.22);
+        ctx.strokeStyle = "rgba(12,11,10,0.88)";
+        ctx.fillStyle = blocked ? "#ff7a68" : "#efe4c4";
+        ctx.strokeText(label, cx, cy + tile * 0.38);
+        ctx.fillText(label, cx, cy + tile * 0.38);
+      }
+    }
 
     if (shake) ctx.restore();
   }

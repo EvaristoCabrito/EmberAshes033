@@ -9,7 +9,7 @@ import { InnScreen } from "./InnScreen";
 import { PartyInventoryOverlay, ItemTip } from "./InventoryScreens";
 import { DialogOverlay } from "./DialogOverlay";
 import { DialogEditor } from "./DialogEditor";
-import { BARRICADE_LIKE_DECOR, CAUSTIC_VENOM, CHEST_LOOT, CLASSES, DEADWOODS_DECOR_IDS, CLEAVE, cleaveFormula, CURE_DISEASE, CURES, DECORATIONS, DOUBLE_STRIKE, doubleStrikeFormula, EQUIPMENT, EXP_TO_LEVEL, FIREBALL, formatSpellUseGains, KILL_DROP_CHANCE, LIGHTNING, LIGHTNING_T3, LONG_SHOT, longShotFormula, MAGIC_MISSILE, PIERCING, piercingMul, PIERCING_THRUST, MAX_GRID, MAX_LEVEL, MIN_GRID, POTIONS, POTION_LOOT_WEIGHT, PROMOTE_LEVEL, PROMOTED_BASE, PROMOTIONS, rulesClass, SHOCK, STAT_POINTS_PER_LEVEL, SUMMON_FAMILIAR, SWEEP, TRIP, TERRAIN, WEAPONS, WEAPON_MAX_ENH, WEB_OF_DREAMS, BAG_MAX, LOCKPICK_PRICE, POTION_CARRY_MAX, POTION_PRICE, RATION_STACK_MAX, RATIONS_PRICE, barricadeDecor, decorationCells, placedFootprint, decorationImage, diceFormula, emberForKill, enemyLevelFor, equippedPouchId, fireballFormula, healFormula, lightningFormula, lightningTier3Formula, dressMap, isSummonClass, MUSIC_TRACKS, SUMMON_CLASSES, parseLayout, potionLabel, potionTooltip, lockpickTooltip, partyBagHasRoom, pouchIcon, rangeLabel, rollPotion, sheetLine, spellFormula, spellIcon, spellTier, spellUseGains, startingBags, statsFor, terrainNote, tierKey, tierUses, weaponEnhCost, weaponSellValue, equipmentFitsSlot, gearStatBonus, MULTI_SHOT, multiShotFormula, SECOND_WIND, secondWindPct, auraPower, AURA_OF_PROTECTION, INTIMIDATING_PRESENCE, DIVINE_WRATH, divineWrathPower, SHOULDER_SMASH, shoulderSmashFormula, STAMPEDE, stampedeFormula, type SpellTier } from "./data";
+import { BARRICADE_LIKE_DECOR, BIG_HOUSE_DECOR_IDS, CAUSTIC_VENOM, CHEST_LOOT, CLASSES, DEADWOODS_DECOR_IDS, CLEAVE, cleaveFormula, CURE_DISEASE, CURES, DECORATIONS, DOUBLE_STRIKE, doubleStrikeFormula, EQUIPMENT, EXP_TO_LEVEL, FIREBALL, formatSpellUseGains, HOUSE_DECOR_IDS, KILL_DROP_CHANCE, LIGHTNING, LIGHTNING_T3, LONG_SHOT, longShotFormula, MAGIC_MISSILE, PIERCING, piercingMul, PIERCING_THRUST, MAX_GRID, MAX_LEVEL, MIN_GRID, POTIONS, POTION_LOOT_WEIGHT, PROMOTE_LEVEL, PROMOTED_BASE, PROMOTIONS, rulesClass, SHOCK, STAT_POINTS_PER_LEVEL, SUMMON_FAMILIAR, SWEEP, TRIP, TERRAIN, WEAPONS, WEAPON_MAX_ENH, WEB_OF_DREAMS, BAG_MAX, LOCKPICK_PRICE, POTION_CARRY_MAX, POTION_PRICE, RATION_STACK_MAX, RATIONS_PRICE, barricadeDecor, decorationCells, placedFootprint, decorationImage, diceFormula, emberForKill, enemyLevelFor, equippedPouchId, fireballFormula, healFormula, lightningFormula, lightningTier3Formula, dressMap, isSummonClass, MUSIC_TRACKS, SUMMON_CLASSES, parseLayout, potionLabel, potionTooltip, lockpickTooltip, partyBagHasRoom, pouchIcon, rangeLabel, rollPotion, sheetLine, spellFormula, spellIcon, spellTier, spellUseGains, startingBags, statsFor, terrainNote, tierKey, tierUses, weaponEnhCost, weaponSellValue, equipmentFitsSlot, gearStatBonus, MULTI_SHOT, multiShotFormula, SECOND_WIND, secondWindPct, auraPower, AURA_OF_PROTECTION, INTIMIDATING_PRESENCE, DIVINE_WRATH, divineWrathPower, SHOULDER_SMASH, shoulderSmashFormula, STAMPEDE, stampedeFormula, type SpellTier } from "./data";
 import { BattleEngine } from "./engine";
 import { MapPreviewCanvas, type PreviewUnitSelection } from "./MapPreviewCanvas";
 import { WorldMapScreen } from "./WorldMapScreen";
@@ -3047,6 +3047,67 @@ function MapEditorScreen({
   const [versionStore, setVersionStore] = useState<Record<string, MapVersion[]>>(() => loadVersionStore());
   const [activeVersions, setActiveVersions] = useState<Record<string, number>>(() => loadActiveVersions());
   const [draft, setDraft] = useState<MapDraft>(() => initialDraft ?? blankDraft());
+  // Undo/redo for the map editor, up to 5 steps each way. A burst of rapid changes (typing
+  // in a text field, dragging a paint stroke across several hexes) is coalesced into a
+  // single step by waiting for a short pause before committing one to history, so undo
+  // moves through whole edits instead of one keystroke or one hex at a time.
+  const [draftPast, setDraftPast] = useState<MapDraft[]>([]);
+  const [draftFuture, setDraftFuture] = useState<MapDraft[]>([]);
+  const lastDraftRef = useRef(draft);
+  const pendingBeforeRef = useRef<MapDraft | null>(null);
+  const coalesceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const applyingHistoryRef = useRef(false);
+  useEffect(() => {
+    const previous = lastDraftRef.current;
+    lastDraftRef.current = draft;
+    if (applyingHistoryRef.current) {
+      applyingHistoryRef.current = false;
+      return;
+    }
+    if (previous === draft) return;
+    if (pendingBeforeRef.current === null) pendingBeforeRef.current = previous;
+    if (coalesceTimerRef.current) clearTimeout(coalesceTimerRef.current);
+    coalesceTimerRef.current = setTimeout(() => {
+      const before = pendingBeforeRef.current;
+      pendingBeforeRef.current = null;
+      coalesceTimerRef.current = null;
+      if (before === null) return;
+      setDraftPast((p) => [...p, before].slice(-5));
+      setDraftFuture([]);
+    }, 600);
+  }, [draft]);
+  useEffect(
+    () => () => {
+      if (coalesceTimerRef.current) clearTimeout(coalesceTimerRef.current);
+    },
+    [],
+  );
+  const undoDraft = useCallback(() => {
+    if (draftPast.length === 0) return;
+    if (coalesceTimerRef.current) {
+      clearTimeout(coalesceTimerRef.current);
+      coalesceTimerRef.current = null;
+      pendingBeforeRef.current = null;
+    }
+    const prevState = draftPast[draftPast.length - 1]!;
+    setDraftPast((p) => p.slice(0, -1));
+    setDraftFuture((f) => [draft, ...f].slice(0, 5));
+    applyingHistoryRef.current = true;
+    setDraft(prevState);
+  }, [draft, draftPast]);
+  const redoDraft = useCallback(() => {
+    if (draftFuture.length === 0) return;
+    if (coalesceTimerRef.current) {
+      clearTimeout(coalesceTimerRef.current);
+      coalesceTimerRef.current = null;
+      pendingBeforeRef.current = null;
+    }
+    const nextState = draftFuture[0]!;
+    setDraftFuture((f) => f.slice(1));
+    setDraftPast((p) => [...p, draft].slice(-5));
+    applyingHistoryRef.current = true;
+    setDraft(nextState);
+  }, [draft, draftFuture]);
   const [brush, setBrush] = useState<TerrainId>("plains");
   const [variant, setVariant] = useState(0);
   // While armed, clicking a hex in Terreno mode turns it instead of painting it.
@@ -3935,6 +3996,7 @@ function MapEditorScreen({
   })();
   const decorOptions = Object.values(DECORATIONS).sort((a, b) => byName(a.name, b.name));
   const decorationSectionFor = (id: string) => {
+    if (HOUSE_DECOR_IDS.has(id) || BIG_HOUSE_DECOR_IDS.has(id)) return "Houses";
     if (DEADWOODS_DECOR_IDS.has(id)) return "Madeira Morta";
     if (
       id === "barricade" ||
@@ -3959,7 +4021,9 @@ function MapEditorScreen({
     if (id.includes("ruined") || id.includes("tower") || id.includes("mansion") || id.includes("wall") || id.includes("gate") || id.includes("shrine") || id.includes("house") || id.includes("hut") || id.includes("hamlet")) return "Ruínas e construções";
     return "Objetos";
   };
-  const decorationSections = ["Todas", "Barricada", "Pontes", "Wilds", "Madeira Morta", "Torture", "City", "Pedras e relevo", "Ruínas e construções", "Natureza", "Objetos"];
+  // "Todas" stays pinned first (it's the "show everything" reset, not a real category);
+  // every actual category below it is kept in alphabetical order.
+  const decorationSections = ["Todas", "Barricada", "City", "Houses", "Madeira Morta", "Natureza", "Objetos", "Pedras e relevo", "Pontes", "Ruínas e construções", "Torture", "Wilds"];
   const visibleDecorOptions = decoSection === "Todas" ? decorOptions : decorOptions.filter((dec) => decorationSectionFor(dec.id) === decoSection);
 
   /** Whatever unit stands on a cell, across all three spawn lists. */
@@ -4609,6 +4673,24 @@ function MapEditorScreen({
               onClick={() => setMode((m) => (m === "elementalFx" ? "paint" : "elementalFx"))}
             >
               FX
+            </Button>
+            <Button
+              size="sm"
+              variant="quiet"
+              disabled={draftPast.length === 0}
+              title={draftPast.length > 0 ? `Desfazer (${draftPast.length} disponível)` : "Nada para desfazer"}
+              onClick={undoDraft}
+            >
+              ↶ Desfazer
+            </Button>
+            <Button
+              size="sm"
+              variant="quiet"
+              disabled={draftFuture.length === 0}
+              title={draftFuture.length > 0 ? `Refazer (${draftFuture.length} disponível)` : "Nada para refazer"}
+              onClick={redoDraft}
+            >
+              ↷ Refazer
             </Button>
             <label className="flex items-center gap-1 rounded-md border border-border bg-bg px-2 py-1 text-xs" title="Categoria atualmente exibida na paleta de decorações">
               <span className="text-muted">Decorações</span>
