@@ -262,6 +262,35 @@ function holyDuration(kind: HolyKind): number {
   return 0.7;
 }
 
+/** The shared physical-skill visual for every warrior/lancer/knight tier — a wipe of steel
+ * light (a blade arc, a low cut, a flattened ring, a fast dash, or a bare shock ring), never
+ * fire or a magic glow, so a physical skill never reads as a spell going off. One pooled
+ * system covers all of them; `kind` picks the shape drawn (see drawBladeFx). */
+type BladeKind = "arc" | "cross" | "lowCut" | "ring" | "dash" | "shockRing";
+interface BladeFx {
+  live: boolean;
+  kind: BladeKind;
+  /** Origin hex — the attacker for arc/ring/dash/shockRing, the target for cross/lowCut. */
+  x: number;
+  y: number;
+  /** Dash-only: the far hex the steel streak travels to. */
+  toX: number;
+  toY: number;
+  /** Arc-only: unwrapped sweep angle range, a1 always >= a0. Cross reuses a0 alone as the
+   * single slash's angle. */
+  a0: number;
+  a1: number;
+  t: number;
+  max: number;
+  seed: number;
+  /** Shoulder Smash's arc reads heavier/warmer than Cleave's — same shape, different tint. */
+  warm: boolean;
+}
+const BLADE_FX_CAP = 12;
+function blankBladeFx(): BladeFx {
+  return { live: false, kind: "arc", x: 0, y: 0, toX: 0, toY: 0, a0: 0, a1: 0, t: 0, max: 0.32, seed: 0, warm: false };
+}
+
 function blankParticle(): Particle {
   return {
     live: false,
@@ -963,6 +992,11 @@ export class BattleEngine {
   private lightningFxLive = 0;
   private holyFx: HolyFx[] = Array.from({ length: HOLY_FX_CAP }, blankHolyFx);
   private holyFxLive = 0;
+  private bladeFx: BladeFx[] = Array.from({ length: BLADE_FX_CAP }, blankBladeFx);
+  private bladeFxLive = 0;
+  /** Flips each time Double Strike lands, so its two hits swoosh opposite diagonals and read
+   * as one crossing pair of slashes rather than the same cut drawn twice. */
+  private doubleStrikeAlt = false;
   private onNextIdle: (() => void) | null = null;
   private rng: () => number;
   private listeners = new Set<() => void>();
@@ -1638,6 +1672,19 @@ export class BattleEngine {
       }
       this.holyFxLive = live;
     }
+    if (this.bladeFxLive) {
+      let live = 0;
+      for (const b of this.bladeFx) {
+        if (!b.live) continue;
+        b.t += cap;
+        if (b.t >= b.max) {
+          b.live = false;
+          continue;
+        }
+        live += 1;
+      }
+      this.bladeFxLive = live;
+    }
     if (this.hitstop > 0) {
       this.hitstop -= cap;
       this.emit();
@@ -1948,6 +1995,14 @@ export class BattleEngine {
                 target.mov = Math.max(1, Math.round(target.mov * keep));
               }
               sfxPlay.trip();
+              this.emitBladeFx("lowCut", target.x, target.y);
+            }
+            if (a.stage === "hit" && a.spellKind === "doubleStrike") {
+              const oc = this.hexCenter(actor.x, actor.y);
+              const tc = this.hexCenter(target.x, target.y);
+              const base = Math.atan2(tc.cy - oc.cy, tc.cx - oc.cx);
+              this.doubleStrikeAlt = !this.doubleStrikeAlt;
+              this.emitBladeFx("cross", target.x, target.y, { a0: base + (this.doubleStrikeAlt ? 0.7 : -0.7) });
             }
           }
         }
@@ -2152,6 +2207,15 @@ export class BattleEngine {
         }
       }
       if (a.spellKind === "fireball" || a.spellKind === "causticVenom") this.emitFireballBurstFx(a.tiles, a.spellKind);
+      if ((a.spellKind === "cleave" || a.spellKind === "shoulderSmash") && a.tiles.length > 0) {
+        const { a0, a1 } = this.arcSweepAngles({ x: att.x, y: att.y }, a.tiles);
+        this.emitBladeFx("arc", att.x, att.y, { a0, a1, warm: a.spellKind === "shoulderSmash" });
+      }
+      if (a.spellKind === "sweep") this.emitBladeFx("ring", att.x, att.y);
+      if ((a.spellKind === "piercingThrust" || a.spellKind === "stampede") && a.tiles.length > 0) {
+        const end = a.tiles[a.tiles.length - 1]!;
+        this.emitBladeFx("dash", att.x, att.y, { toX: end.x, toY: end.y });
+      }
       if (!this.reducedMotion) this.trauma = Math.min(1, this.trauma + (a.spellKind === "lightningTier3" ? 0.95 : a.spellKind === "lightning" ? 0.72 : 0.45));
 
     }
@@ -2890,6 +2954,62 @@ export class BattleEngine {
     }
   }
 
+  /** One steel-swoosh effect — see BladeFx/BladeKind. Shared by every warrior/lancer/knight
+   * physical skill; `opts` fills in only whatever that shape needs (arc's a0/a1, dash's
+   * toX/toY, Shoulder Smash's warm tint). */
+  private emitBladeFx(
+    kind: BladeKind,
+    x: number,
+    y: number,
+    opts: { a0?: number; a1?: number; toX?: number; toY?: number; warm?: boolean; dur?: number } = {},
+  ): void {
+    if (this.reducedMotion) return;
+    let slot = this.bladeFx.find((b) => !b.live);
+    if (!slot) {
+      slot = this.bladeFx[0]!;
+      let oldest = 0;
+      for (const b of this.bladeFx) {
+        if (b.t / b.max > oldest) {
+          oldest = b.t / b.max;
+          slot = b;
+        }
+      }
+    } else this.bladeFxLive += 1;
+    slot.live = true;
+    slot.kind = kind;
+    slot.x = x;
+    slot.y = y;
+    slot.toX = opts.toX ?? x;
+    slot.toY = opts.toY ?? y;
+    slot.a0 = opts.a0 ?? 0;
+    slot.a1 = opts.a1 ?? opts.a0 ?? 0;
+    slot.warm = opts.warm ?? false;
+    slot.t = 0;
+    slot.max = opts.dur ?? (kind === "ring" || kind === "shockRing" ? 0.44 : kind === "dash" ? 0.3 : 0.34);
+    slot.seed = this.rng() * Math.PI * 2;
+  }
+
+  /** The unwrapped angle range (a0..a1, a1 >= a0) from `origin` through each hex in
+   * `tiles` in order — used to point Cleave/Shoulder Smash's blade arc at exactly the fan of
+   * hexes cleaveHexes picked, whichever of the 6 ring directions that turned out to be. */
+  private arcSweepAngles(origin: Point, tiles: Point[]): { a0: number; a1: number } {
+    const o = this.hexCenter(origin.x, origin.y);
+    const angleTo = (t: Point) => {
+      const c = this.hexCenter(t.x, t.y);
+      return Math.atan2(c.cy - o.cy, c.cx - o.cx);
+    };
+    const unwrap = (base: number, ang: number) => {
+      let d = ang - base;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      return base + d;
+    };
+    const a0 = angleTo(tiles[0]!);
+    let last = a0;
+    for (let i = 1; i < tiles.length; i++) last = unwrap(last, angleTo(tiles[i]!));
+    return last >= a0 ? { a0, a1: last } : { a0: last, a1: a0 };
+  }
+
   /** A whiffed attack: just the floating "Missed" text, no impact flash or hit particles. */
   private spawnMiss(target: Unit): void {
     this.emitParticle({
@@ -3437,6 +3557,7 @@ export class BattleEngine {
     this.spellAim = null;
     this.tip = `${INTIMIDATING_PRESENCE.name}: inimigos a até ${p.radius} hexes tomam ${Math.round(p.pct * 100)}% mais dano por ${p.duration} rodadas.`;
     this.mode = "locked";
+    this.emitBladeFx("shockRing", u.x, u.y);
     this.queue.push({ type: "banner", text: INTIMIDATING_PRESENCE.name, dur: 1.1 });
     sfxPlay.ui();
   }
@@ -4356,8 +4477,8 @@ export class BattleEngine {
     // strikes, each just gets its own independent roll of the current tier.
     const power = doubleStrikePower(unit.level);
     const bonus = power.dice > 0 ? { bonusDice: power.faces, bonusDiceCount: power.dice, bonusFlat: 0 } : {};
-    this.queue.push({ type: "combat", att: unit.id, def: foe.id, noCounter: true, ...bonus });
-    this.queue.push({ type: "combat", att: unit.id, def: foe.id, ...bonus });
+    this.queue.push({ type: "combat", att: unit.id, def: foe.id, noCounter: true, spellKind: "doubleStrike", ...bonus });
+    this.queue.push({ type: "combat", att: unit.id, def: foe.id, spellKind: "doubleStrike", ...bonus });
   }
 
   private castTrip(unit: Unit, cell: Point): void {
@@ -7710,6 +7831,7 @@ export class BattleEngine {
     }
 
     this.drawHolyFx(ctx, tile);
+    this.drawBladeFx(ctx, tile);
 
     // Foreground parapets are the nearest scenery: no unit, HP bar, projectile, or spell
     // effect that is physically behind their artwork may show through.
@@ -7782,6 +7904,138 @@ export class BattleEngine {
       ctx.globalCompositeOperation = "lighter";
       if (fx.kind === "potion") this.drawPotionBurst(ctx, cx, cy, tile, fx, fade, k);
       else this.drawDivineLight(ctx, cx, cy, tile, fx, fade, k);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** The shared steel-swoosh visual — see BladeFx/BladeKind. Every shape here is plain
+   * white-steel light (glow pass + bright core pass), the same treatment a real blade catches
+   * the light with, and never fire or a magic-circle glow. */
+  private drawBladeFx(ctx: CanvasRenderingContext2D, tile: number): void {
+    if (!this.bladeFxLive) return;
+    for (const b of this.bladeFx) {
+      if (!b.live) continue;
+      const k = b.t / b.max;
+      const { cx, cy } = this.hexCenter(b.x, b.y);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineCap = "round";
+
+      if (b.kind === "arc") {
+        const swing = Math.min(1, k / 0.55);
+        const fade = k < 0.55 ? 1 : Math.max(0, 1 - (k - 0.55) / 0.45);
+        if (fade > 0) {
+          const radius = tile * 1.05;
+          const start = b.a0;
+          const end = b.a0 + (b.a1 - b.a0) * swing;
+          const glowColor = b.warm ? `rgba(255,188,108,${0.55 * fade})` : `rgba(222,236,255,${0.5 * fade})`;
+          ctx.strokeStyle = glowColor;
+          ctx.lineWidth = tile * (b.warm ? 0.44 : 0.34);
+          ctx.shadowColor = b.warm ? "rgba(255,150,55,0.9)" : "rgba(215,232,255,0.9)";
+          ctx.shadowBlur = tile * 0.35;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, start, end);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = `rgba(255,255,255,${0.95 * fade})`;
+          ctx.lineWidth = tile * (b.warm ? 0.15 : 0.1);
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, start, end);
+          ctx.stroke();
+        }
+      } else if (b.kind === "cross") {
+        const fade = Math.max(0, 1 - k);
+        if (fade > 0) {
+          const len = tile * 0.95;
+          const dx = Math.cos(b.a0) * len * 0.5;
+          const dy = Math.sin(b.a0) * len * 0.5;
+          ctx.translate(cx, cy - tile * 0.15);
+          ctx.strokeStyle = `rgba(222,236,255,${0.6 * fade})`;
+          ctx.lineWidth = tile * 0.18;
+          ctx.shadowColor = "rgba(215,232,255,0.9)";
+          ctx.shadowBlur = tile * 0.25;
+          ctx.beginPath();
+          ctx.moveTo(-dx, -dy);
+          ctx.lineTo(dx, dy);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = `rgba(255,255,255,${0.95 * fade})`;
+          ctx.lineWidth = tile * 0.06;
+          ctx.beginPath();
+          ctx.moveTo(-dx, -dy);
+          ctx.lineTo(dx, dy);
+          ctx.stroke();
+        }
+      } else if (b.kind === "lowCut") {
+        const fade = Math.max(0, 1 - k);
+        if (fade > 0) {
+          const len = tile * 0.7;
+          ctx.translate(cx, cy + tile * 0.28);
+          ctx.strokeStyle = `rgba(222,236,255,${0.6 * fade})`;
+          ctx.lineWidth = tile * 0.14;
+          ctx.shadowColor = "rgba(215,232,255,0.85)";
+          ctx.shadowBlur = tile * 0.2;
+          ctx.beginPath();
+          ctx.moveTo(-len * 0.5, 0);
+          ctx.lineTo(len * 0.5, tile * 0.05);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = `rgba(255,255,255,${0.9 * fade})`;
+          ctx.lineWidth = tile * 0.045;
+          ctx.beginPath();
+          ctx.moveTo(-len * 0.5, 0);
+          ctx.lineTo(len * 0.5, tile * 0.05);
+          ctx.stroke();
+        }
+      } else if (b.kind === "ring" || b.kind === "shockRing") {
+        const tight = b.kind === "shockRing";
+        const fade = Math.max(0, 1 - k);
+        if (fade > 0) {
+          const r = tile * (tight ? 0.3 + k * 0.9 : 0.4 + k * 1.5);
+          ctx.translate(cx, cy);
+          ctx.scale(1, tight ? 0.62 : 0.5);
+          ctx.strokeStyle = `rgba(222,236,255,${(tight ? 0.85 : 0.8) * fade})`;
+          ctx.lineWidth = tile * (tight ? 0.1 : 0.16) * (1 - k * 0.5);
+          ctx.shadowColor = "rgba(215,232,255,0.9)";
+          ctx.shadowBlur = tile * 0.3;
+          ctx.beginPath();
+          ctx.arc(0, 0, r, 0, Math.PI * 2);
+          ctx.stroke();
+          if (tight) {
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = `rgba(255,255,255,${0.6 * fade})`;
+            ctx.lineWidth = tile * 0.035;
+            ctx.beginPath();
+            ctx.arc(0, 0, r * 0.72, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+      } else if (b.kind === "dash") {
+        const travel = b.max * 0.6;
+        const kHead = Math.min(1, b.t / travel);
+        const fade = b.t < travel ? 1 : Math.max(0, 1 - (b.t - travel) / (b.max - travel));
+        if (fade > 0) {
+          const to = this.hexCenter(b.toX, b.toY);
+          const headX = cx + (to.cx - cx) * kHead;
+          const headY = cy + (to.cy - cy) * kHead;
+          ctx.strokeStyle = `rgba(222,236,255,${0.85 * fade})`;
+          ctx.lineWidth = tile * 0.22;
+          ctx.shadowColor = "rgba(215,232,255,0.95)";
+          ctx.shadowBlur = tile * 0.3;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(headX, headY);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = `rgba(255,255,255,${0.95 * fade})`;
+          ctx.lineWidth = tile * 0.07;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(headX, headY);
+          ctx.stroke();
+        }
+      }
       ctx.restore();
     }
     ctx.globalAlpha = 1;
