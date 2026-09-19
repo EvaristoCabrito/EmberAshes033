@@ -2679,18 +2679,28 @@ const EDITOR_ROWS_DEFAULT = 20;
  * with, without being maxed out. */
 const DEFAULT_TEST_LEVEL = 10;
 
-/** One canonical scenario prefix everywhere: the editor's ID becomes the exact file prefix.
- * `Vau 01` therefore saves as `vau-01001.json` only if the author actually made the ID
- * `vau-01`; the trailing three digits are always the generated save serial. */
-function normalizeScenarioId(value: string): string {
-  const id = value
+/** Character-level cleanup shared by the live editor field and normalizeScenarioId below \u2014
+ * split out so the input can hold a genuinely empty string while the author is mid-edit
+ * (e.g. select-all + delete to retype the whole id) without snapping back to a fallback on
+ * every keystroke. */
+function sanitizeScenarioId(value: string): string {
+  return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
-  return id || "scenario";
+}
+
+/** One canonical scenario prefix everywhere: the editor's ID becomes the exact file prefix.
+ * `Vau 01` therefore saves as `vau-01001.json` only if the author actually made the ID
+ * `vau-01`; the trailing three digits are always the generated save serial. Only applied at
+ * actual save/export/activate time (see call sites) \u2014 the live field itself uses
+ * sanitizeScenarioId so it can sit empty while being retyped instead of forcing this
+ * fallback in the middle of an edit. */
+function normalizeScenarioId(value: string): string {
+  return sanitizeScenarioId(value) || "scenario";
 }
 
 /** Finds the ground that should reappear when a terrain-changing decoration is removed.
@@ -4183,7 +4193,7 @@ function MapEditorScreen({
             <input
               className="bg-bg border border-border rounded-md px-2 py-1.5"
               value={draft.id}
-              onChange={(e) => setDraft((d) => ({ ...d, id: normalizeScenarioId(e.target.value) }))}
+              onChange={(e) => setDraft((d) => ({ ...d, id: sanitizeScenarioId(e.target.value) }))}
             />
           </label>
           <label className="flex flex-col gap-1">

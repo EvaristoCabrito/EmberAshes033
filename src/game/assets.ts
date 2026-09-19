@@ -292,7 +292,11 @@ export async function loadGameArt(): Promise<GameArt> {
   const WALK_FRAMES: Partial<Record<SpriteId, { n: number; bust: string }>> = {
     familiar: { n: 8, bust: "?v=6" },
     "ancient-golem": { n: 8, bust: "" },
-    malrec: { n: 6, bust: "?v=sheet2" },
+    // Replaced with a new 36-frame authored walk cut (malrec-walk-002); the old 6-frame cycle
+    // lives on as idles2.malrec (a second idle loop) instead of being discarded. "move-*" and
+    // "move-left-*" here read from the "Left"/"Right" source folders swapped — same mislabeling
+    // as Cultist V2 and Lancer's own walk cuts, verified visually before slicing.
+    malrec: { n: 36, bust: "?v=malrec-walk-002" },
     aldric: { n: 36, bust: "?v=aldric-final-001" },
     defaultLancer: { n: 6, bust: "?v=sheet2" },
     lancer: { n: 6, bust: "?v=3" },
@@ -328,7 +332,7 @@ export async function loadGameArt(): Promise<GameArt> {
     DIR_LEFT.map(async (id) => {
       const walkN = WALK_FRAMES[id]?.n ?? 6;
       const atkN = ATTACK_FRAMES[id]?.n ?? 5;
-      const bust = id === "lancer" ? "?v=4" : id === "sandoval" ? "?v=sandoval-complete-001" : id === "aldric" ? "?v=aldric-final-001" : "?v=sheet2";
+      const bust = id === "lancer" ? "?v=4" : id === "malrec" ? "?v=malrec-walk-002" : id === "sandoval" ? "?v=sandoval-complete-001" : id === "aldric" ? "?v=aldric-final-001" : "?v=sheet2";
       // See the "move"/"move-left" swap note in the generic walks loop above — Lancer's walk
       // cuts are swapped, so its left-facing pool reads "move-*" (the actually-leftward cut)
       // instead of "move-left-*". Its attack cuts are correctly named already.
@@ -382,6 +386,11 @@ export async function loadGameArt(): Promise<GameArt> {
     kael: await Promise.all(Array.from({ length: 12 }, (_, i) => loadImage(`/game/sprites/kael-v2/stand-${i + 1}.png?v=kael-v2`))),
     kaelEarly: await Promise.all(Array.from({ length: 36 }, (_, i) => loadImage(`/game/sprites/kael/stand-${i + 1}.png?v=kael-early`))),
   };
+  // Malrec's old 6-frame walk cycle (before it got a real authored move-*/move-left-* cut)
+  // is repurposed here as a second idle loop, saved as idle2-*.png — see Unit.idleVariant.
+  const idles2: Partial<Record<SpriteId, HTMLImageElement[]>> = {
+    malrec: await Promise.all(Array.from({ length: 6 }, (_, i) => loadImage(spriteFrameSrc("malrec", `idle2-${i + 1}`, "?v=1")))),
+  };
   const walkDirs: GameArt["walkDirs"] = {
     // kael-v2 has no walk-front/back/side cut, so "kael" has no walkDirs entry — it falls
     // back to its idle loop while moving, like any sprite absent from this table.
@@ -412,5 +421,5 @@ export async function loadGameArt(): Promise<GameArt> {
     // priority over them while moving (see the render loop's img lookup), leaving that
     // animation dead code.
   };
-  return { tiles, decorations, sprites, attacks, attacksLeft, casts, castsLeft, counters, countersLeft, walks, walksLeft, idles, walkDirs, impact, fireballCore, causticVenomCore, arrowCore, lightningCores, backdrops };
+  return { tiles, decorations, sprites, attacks, attacksLeft, casts, castsLeft, counters, countersLeft, walks, walksLeft, idles, idles2, walkDirs, impact, fireballCore, causticVenomCore, arrowCore, lightningCores, backdrops };
 }

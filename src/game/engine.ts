@@ -729,6 +729,7 @@ function spawnUnit(spawn: Mission["playerSpawns"][number], side: Unit["side"], i
     guaranteedDrop: side === "enemy" && !!spawn.guaranteedDrop,
     dialog: spawn.dialog ?? null,
     moveBudgetUsed: 0,
+    idleVariant: 0,
   };
 }
 
@@ -800,6 +801,7 @@ function unitFromSnap(snap: BattleUnitSnap): Unit {
     guaranteedDrop: snap.guaranteedDrop,
     dialog: snap.dialog,
     moveBudgetUsed: snap.moveBudgetUsed,
+    idleVariant: 0,
   };
 }
 
@@ -1918,6 +1920,7 @@ export class BattleEngine {
         unit.y = from.y;
         unit.drawX = from.x;
         unit.drawY = from.y;
+        unit.idleVariant = unit.idleVariant ? 0 : 1;
         this.active = null;
         return;
       }
@@ -2564,6 +2567,7 @@ export class BattleEngine {
   private finishCombat(att: Unit): void {
     att.drawX = att.x;
     att.drawY = att.y;
+    att.idleVariant = att.idleVariant ? 0 : 1;
     this.active = null;
     this.spellKind = null;
     this.missileTargets = [];
@@ -4681,6 +4685,7 @@ export class BattleEngine {
       guaranteedDrop: false,
       dialog: null,
       moveBudgetUsed: 0,
+      idleVariant: 0,
     };
     this.units.push(familiar);
     this.spendTier(unit, "summonFamiliar");
@@ -7188,7 +7193,12 @@ export class BattleEngine {
       ctx.fill();
       const atk = this.attackPose(u);
       const moving = this.active?.type === "move" && this.active.id === u.id;
-      const idle = !atk && !moving ? this.art.idles[u.sprite] : undefined;
+      // idleVariant flips every time this unit settles back into idle (see finishCombat and
+      // the move-completion branch above) — a sprite with a second idle cut (idles2, e.g.
+      // Malrec's old walk repurposed as a second stand-around pose) alternates onto it every
+      // other time instead of always showing the same idle loop.
+      const idle2 = u.idleVariant ? this.art.idles2[u.sprite] : undefined;
+      const idle = !atk && !moving ? (idle2 ?? this.art.idles[u.sprite]) : undefined;
       // While moving, a sprite that has a walk cut plays it; one that doesn't falls back to
       // its idle loop, which idleFrame already runs faster for a moving unit.
       const faceRight = u.facing === 1;

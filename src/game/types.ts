@@ -498,6 +498,12 @@ export interface Unit {
    * still letting the player freely change their mind about WHERE within that budget to
    * end up (the actual point of free repositioning). */
   moveBudgetUsed: number;
+  /** Flips (0/1) every time this unit finishes an action (a move, or a combat/spell/heal via
+   * finishCombat) and settles back into standing idle — lets a sprite with a second idle cut
+   * (see GameArt.idles2) alternate between the two instead of always showing the same one.
+   * Meaningless for a sprite without one; render() just ignores it then. Not carried in
+   * BattleSnapshot — purely a visual detail, fine to reset to 0 on resume. */
+  idleVariant: number;
 }
 
 export interface UnitPublic {
@@ -750,6 +756,11 @@ export interface GameArt {
    * regular flip) for every sprite without one. */
   countersLeft: Partial<Record<SpriteId, HTMLImageElement[]>>;
   idles: Partial<Record<SpriteId, HTMLImageElement[]>>;
+  /** A second idle loop for the few sprites that have one (see Unit.idleVariant) — the unit
+   * alternates onto this every other time it settles back into standing idle, instead of
+   * always playing the same one. Falls back to `idles`/the generic stand-frames pool for
+   * every sprite without one. */
+  idles2: Partial<Record<SpriteId, HTMLImageElement[]>>;
   walkDirs: Partial<Record<SpriteId, WalkDirs>>;
   impact: HTMLImageElement[];
   /** Ultra-realistic Fireball core; its trail and light remain procedural. */
