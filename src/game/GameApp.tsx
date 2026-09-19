@@ -728,6 +728,13 @@ export function GameApp() {
   }, []);
 
   const [customMission, setCustomMission] = useState<Mission | null>(null);
+  // The per-spawn levels set in the editor's playtest — draftToMission strips "level" off
+  // every spawn (Mission itself has nowhere to carry it), so this is the only record of
+  // them once startBattle has consumed its own playerLevels/enemyLevels arguments. Kept
+  // alongside customMission so a defeat-screen retry can pass the same levels again
+  // instead of falling back to startBattle's mission-index default (which reads as
+  // "testing always starts everyone at level 1").
+  const [customLevels, setCustomLevels] = useState<{ player: Record<string, number>; enemy: Record<string, number> } | null>(null);
   /** The map open in the Map Editor, kept out here so a playtest — which unmounts that
    * screen — does not discard it. */
   const editorDraft = useRef<MapDraft | null>(resumeEditorDraft);
@@ -789,6 +796,7 @@ export function GameApp() {
       // id for versioning) and reroute a normal victory back into the editor.
       if (!override) {
         setCustomMission(null);
+        setCustomLevels(null);
       }
       const m = override ?? missionById(id);
       if (!m) return;
@@ -1042,6 +1050,7 @@ export function GameApp() {
   const openMission = (id: string) => {
     bootAudio();
     setCustomMission(null);
+    setCustomLevels(null);
     setMissionId(id);
     setScreen("briefing");
   };
@@ -1407,6 +1416,7 @@ export function GameApp() {
           onBack={() => { clearEditorResume(); setScreen("testMenu"); }}
           onPlaytest={(m, playerLevels, enemyLevels) => {
             setCustomMission(m);
+            setCustomLevels({ player: playerLevels, enemy: enemyLevels });
             startBattle(m.id, {}, m, playerLevels, enemyLevels);
           }}
         />
@@ -1831,6 +1841,7 @@ export function GameApp() {
             // with the map still loaded. Quitting a real mission still exits to the map.
             if (customMission) {
               setCustomMission(null);
+              setCustomLevels(null);
               setScreen("mapEditor");
               return;
             }
@@ -1856,6 +1867,7 @@ export function GameApp() {
           onMap={() => {
             if (customMission) {
               setCustomMission(null);
+              setCustomLevels(null);
               setScreen("mapEditor");
               return;
             }
@@ -1896,11 +1908,14 @@ export function GameApp() {
           growth={null}
           art={briefArt(mission.id)}
           onTitle={goToTitle}
-          onNext={() => startBattle(mission.id, save.unitHp, customMission ?? undefined)}
+          onNext={() =>
+            startBattle(mission.id, save.unitHp, customMission ?? undefined, customLevels?.player, customLevels?.enemy)
+          }
           onMap={
             customMission
               ? () => {
                   setCustomMission(null);
+                  setCustomLevels(null);
                   setScreen("mapEditor");
                 }
               : undefined

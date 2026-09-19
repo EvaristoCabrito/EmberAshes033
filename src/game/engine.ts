@@ -33,7 +33,7 @@ import { packExplored, relight, sightReaches, unpackExplored } from "./fog";
 import { buildDecorOverlay, hexDef, type DecorOverlay } from "./hexprops";
 import { ACTION_HUNGER_COST, drainHunger, fullness } from "./hunger";
 import { HUNGER_PENALTY_MAX } from "./overworld";
-import { sfxPlay } from "./audio";
+import { playUnitAttack, playUnitSpellcast, sfxPlay } from "./audio";
 import type {
   Bag,
   BattleSnapshot,
@@ -91,6 +91,13 @@ const ZOOM_RADII = [22, 34, 50, 72];
 /** Seconds one step of a walk animation takes. Shared by the position and the
  * high-ground lift so a unit's feet and its elevation move on the same clock. */
 const MOVE_STEP_DUR = 0.12;
+
+/** Global playback-speed dial for every animated action (movement, attacks, spells, FX
+ * timers, hitstop...). Everything in tick() that advances on `cap` reads off this same
+ * clock, so scaling it here once slows the whole game down in lockstep instead of drifting
+ * out of sync the way hand-tuning dozens of separate duration constants would. Below 1 =
+ * slower / easier to follow, 1 = the original pace. */
+const GAME_SPEED_MUL = 0.7;
 
 /** Level-up flourish: a small pixel-space burst anchored to a unit's hex (recomputed every
  * frame from its live position, so it still tracks correctly if the unit somehow moves mid-
@@ -559,9 +566,10 @@ function remainingTier(classId: ClassId, tier: SpellTier, key: TierKey, level: n
 
 // The mage line's own staves are pooled with the conjurer line's (ARCANE_ALL — any arcane
 // caster can wield any arcane staff), so this bonus can't live on the weapon without also
-// handing it to conjurer/sorcerer/necromancer. It's a trait of the mage class itself:
+// handing it to sorcerer/necromancer. It's a trait of the mage class itself, extended to
+// conjurer by direct request so its basic ATT reaches the same radius a normal mage's does:
 // applied after weapon-or-class range is resolved below, on top of either source.
-const MAGE_RANGE_BONUS_CLASSES: ReadonlySet<ClassId> = new Set(["mage", "voss", "elementalist", "warlock"]);
+const MAGE_RANGE_BONUS_CLASSES: ReadonlySet<ClassId> = new Set(["mage", "voss", "elementalist", "warlock", "conjurer"]);
 
 function spawnUnit(spawn: Mission["playerSpawns"][number], side: Unit["side"], i: number, roster?: Roster, enemyLevel = 1): Unit {
   const requestedClassId = (side === "player" ? roster?.promotions?.[spawn.name] : undefined) ?? spawn.classId;
@@ -1590,7 +1598,7 @@ export class BattleEngine {
   }
 
   tick(dt: number): void {
-    const cap = Math.min(0.05, dt);
+    const cap = Math.min(0.05, dt) * GAME_SPEED_MUL;
     this.time += cap;
     if (this.tip !== this.lastTipSeen) {
       this.lastTipSeen = this.tip;
@@ -1763,6 +1771,10 @@ export class BattleEngine {
       // cut) — play whichever matches this move's own first step instead of the generic
       // footstep beep every other sprite uses.
       const mover = this.units.find((u) => u.id === step.id);
+      // An enemy acting far from wherever the camera currently sits (the player's own last
+      // move, an earlier fight elsewhere on the map) needs the camera to actually find it
+      // first — otherwise its whole turn plays out off-screen and unseen.
+      if (mover) this.ensureVisible(mover.x, mover.y);
       if (mover?.sprite === "cultist-v2" && step.path.length >= 2) {
         if (step.path[1]!.x < step.path[0]!.x) sfxPlay.cultistV2WalkLeft();
         else sfxPlay.cultistV2WalkRight();
@@ -1772,8 +1784,10 @@ export class BattleEngine {
     } else if (step.type === "combat") {
       const target = this.units.find((u) => u.id === step.def);
       if (!target || !target.alive) return;
+      const attacker = this.units.find((u) => u.id === step.att);
+      if (attacker) this.ensureVisible(attacker.x, attacker.y);
       this.faceSpriteToward(step.att, target.x);
-      this.faceSpriteToward(step.def, this.units.find((u) => u.id === step.att)?.x ?? target.x);
+      this.faceSpriteToward(step.def, attacker?.x ?? target.x);
       this.active = {
         type: "combat",
         att: step.att,
@@ -1791,6 +1805,10 @@ export class BattleEngine {
         stunChance: step.stunChance ?? 0,
       };
     } else if (step.type === "spell") {
+      // Same reasoning as the move/combat branches above — an off-screen caster's whole cast
+      // would otherwise play out unseen.
+      const caster = this.units.find((u) => u.id === step.att);
+      if (caster) this.ensureVisible(caster.x, caster.y);
       this.active = {
         type: "spell",
         att: step.att,
@@ -1965,8 +1983,7 @@ export class BattleEngine {
           sfxPlay.arrowAttack();
           this.emitMissileFx(actor.x, actor.y, target.x, target.y, "longShot");
         } else if (arcaneBolt) {
-          if (actor.sprite === "cultist-v2") sfxPlay.cultistV2Attack();
-          else sfxPlay.magicAttack();
+          if (!playUnitAttack(actor.sprite)) sfxPlay.magicAttack();
           this.emitMissileFx(actor.x, actor.y, target.x, target.y, "arcaneBolt");
         } else {
           sfxPlay.meleeAttack();
@@ -2130,8 +2147,7 @@ export class BattleEngine {
     if (!a.hit && a.t >= hitAt) {
       a.hit = true;
       if (a.spellKind === "webOfDreams") sfxPlay.dreamingWeb();
-      else if (att.sprite === "cultist-v2") sfxPlay.cultistV2Spellcast();
-      else sfxPlay.spell();
+      else if (!playUnitSpellcast(att.sprite)) sfxPlay.spell();
       // AoE/line spells: the first enemy actually hit grants full XP, every enemy after
       // that in the same cast grants half — hitting a whole group shouldn't out-earn
       // picking them off one at a time, but the first one still counts fully.
@@ -7208,11 +7224,24 @@ export class BattleEngine {
       // scale as kaelEarly, not kaelFinal's correction — only kaelFinal's own (larger,
       // full-body-on-canvas) art needs the boost.
       // Sandoval is a distinct boss cut, not this same asset, so it gets its own scale.
+      // Cultist V2's frames were cropped edge-to-edge to the character's own silhouette
+      // (measured: idle/walk fill ~95-99% of their frame, versus other human sprites'
+      // art which leaves visible headroom/margin — see malrec for comparison) instead of
+      // sharing the same margin convention as every other human sprite, so it renders
+      // noticeably larger than its human-sized peers unless scaled down to match.
       const isLancer = u.classId === "lancer" || u.sprite === "lancer" || u.sprite === "defaultLancer";
       const isSandoval = u.classId === "sandoval" || u.sprite === "sandoval";
       const isFamiliar = u.classId === "familiar" || u.sprite === "familiar";
       const isKaelFinal = u.sprite === "kaelFinal";
-      const spriteScale = isLancer ? 1.4 : isSandoval ? 1.2 : isFamiliar ? 0.5 : isKaelFinal ? 0.9 : 1;
+      const isCultistV2 = u.sprite === "cultist-v2";
+      // Malrec's new 36-frame attack cut sits noticeably smaller in its frame than its own
+      // idle art for most of the swing (measured: ~77% fill vs idle's ~97%), only reaching
+      // idle's scale during the brief impact frames — a flat per-sprite scale can't fix that
+      // without overshooting the impact frames, but a moderate boost during the attack pool
+      // specifically keeps him from reading as "shrinking" for most of the animation without
+      // making the impact frames blatantly oversized.
+      const isMalrecAttack = u.sprite === "malrec" && atk != null;
+      const spriteScale = isLancer ? 1.4 : isSandoval ? 1.2 : isFamiliar ? 0.5 : isKaelFinal ? 0.9 : isCultistV2 ? 0.85 : isMalrecAttack ? 1.15 : 1;
       const h = cell * (s >= 4 ? 3.35 : s === 2 ? 1.72 : boss ? 1.44 : 1.42) * 1.2 * (isBigCreatureFootprint ? 0.75 : 1) * spriteScale;
       const w = cell * (s >= 4 ? 2.85 : s === 2 ? 1.85 : boss ? 1.12 : 1.11) * 1.2 * (isBigCreatureFootprint ? 0.75 : 1) * spriteScale;
       // Big creatures plant their feet at the bottom corner of their front hex (tile * 0.9,
@@ -7225,9 +7254,12 @@ export class BattleEngine {
       // theButcher (The Butcher — distinct from "punisher"/Carrasco) only has a dedicated
       // left cut for its walk, not its attack (see walksLeft.theButcher in assets.ts) —
       // its attack still falls back to the mirrored right-facing pool, so it stays out of
-      // the attack half of this check.
+      // the attack half of this check. Malrec's walk keeps its dedicated left cut, but its
+      // attack was replaced with a new 36-frame cut with no matching left-facing sheet (see
+      // the assets.ts note by attacksLeft.malrec) — so it now falls back to the mirrored
+      // right-facing pool too, and stays out of the attack half of this check as well.
       const dirActionWalk = (u.sprite === "malrec" || u.sprite === "aldric" || u.sprite === "defaultLancer" || u.sprite === "lancer" || u.sprite === "sandoval" || u.sprite === "theButcher") && moving;
-      const dirActionAttack = (u.sprite === "malrec" || u.sprite === "aldric" || u.sprite === "defaultLancer" || u.sprite === "lancer" || u.sprite === "sandoval") && atk != null;
+      const dirActionAttack = (u.sprite === "aldric" || u.sprite === "defaultLancer" || u.sprite === "lancer" || u.sprite === "sandoval") && atk != null;
       const dirAction = dirActionWalk || dirActionAttack;
       // The familiar's art is drawn facing left by default — the opposite of every other
       // sprite's "facing 1 shows the sheet as drawn" convention — so its mirror has to run

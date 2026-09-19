@@ -1016,7 +1016,7 @@ export const CLASSES: Record<ClassId, ClassDef> = {
   aldric: {
     id: "aldric",
     name: "Lanceiro",
-    role: "Pique",
+    role: "Pique · Aldric",
     hp: 26,
     atk: 8,
     mag: 0,
@@ -1086,7 +1086,7 @@ export const CLASSES: Record<ClassId, ClassDef> = {
   neera: {
     id: "neera",
     name: "Arqueira",
-    role: "Alcance",
+    role: "Alcance · Neera",
     hp: 24,
     atk: 8,
     mag: 0,
@@ -1102,7 +1102,7 @@ export const CLASSES: Record<ClassId, ClassDef> = {
   voss: {
     id: "voss",
     name: "Mago Negro",
-    role: "Magia",
+    role: "Magia · Voss",
     hp: 22,
     atk: 3,
     mag: 10,
@@ -1118,7 +1118,7 @@ export const CLASSES: Record<ClassId, ClassDef> = {
   salazar: {
     id: "salazar",
     name: "Curandeiro",
-    role: "Cura",
+    role: "Cura · Salazar",
     hp: 26,
     atk: 4,
     mag: 8,

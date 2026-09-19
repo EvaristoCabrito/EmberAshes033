@@ -206,7 +206,10 @@ export async function loadGameArt(): Promise<GameArt> {
     nira: { n: 4, bust: "" },
     voss: { n: 4, bust: "" },
     salazar: { n: 4, bust: "" },
-    malrec: { n: 5, bust: "?v=sheet2" },
+    // Replaced with a new 36-frame authored cut (see the malrec-atk-002 note on the DIR_LEFT
+    // loop below — its left-facing counterpart is not being regenerated, so malrec's attack
+    // now mirrors this pool via CSS flip instead of using a dedicated left cut).
+    malrec: { n: 36, bust: "?v=malrec-atk-002" },
     aldric: { n: 36, bust: "?v=aldric-final-001" },
     defaultLancer: { n: 5, bust: "?v=sheet2" },
     familiar: { n: 8, bust: "?v=6" },
@@ -222,7 +225,10 @@ export async function loadGameArt(): Promise<GameArt> {
     sandoval: { n: 6, bust: "?v=sandoval-complete-001" },
     kaelFinal: { n: 36, bust: "?v=kael-final-002" },
     conjurer: { n: 36, bust: "?v=conjurer-complete-003" },
-    "cultist-v2": { n: 36, bust: "" },
+    // Bumped whenever the on-disk frames are re-cropped/re-cut, so a browser that already
+    // fetched the old files (no cache-busting query before this) is forced to re-fetch
+    // instead of silently keeping the stale ones.
+    "cultist-v2": { n: 36, bust: "?v=2" },
   };
   await Promise.all(
     (Object.keys(ATTACK_FRAMES) as SpriteId[]).map(async (id) => {
@@ -242,7 +248,10 @@ export async function loadGameArt(): Promise<GameArt> {
     // Aldric's dedicated skill pose — plays only for his spell-typed pike skills (Piercing
     // Thrust, Sweep, ...), never for a plain attack, which stays on the ATT cut.
     aldric: { n: 36, bust: "?v=aldric-final-001" },
-    "cultist-v2": { n: 36, bust: "" },
+    // Bumped after cropping out the uniform ~76px dead zone below the feet on every cast
+    // frame (see the floor-gap note where these frames were fixed) — same cache-busting
+    // reasoning as ATTACK_FRAMES["cultist-v2"] above.
+    "cultist-v2": { n: 36, bust: "?v=2" },
   };
   const casts: Partial<Record<SpriteId, HTMLImageElement[]>> = {};
   await Promise.all(
@@ -304,7 +313,12 @@ export async function loadGameArt(): Promise<GameArt> {
   await Promise.all(
     (Object.keys(WALK_FRAMES) as SpriteId[]).map(async (id) => {
       const { n, bust } = WALK_FRAMES[id]!;
-      walks[id] = await Promise.all(Array.from({ length: n }, (_, i) => loadImage(spriteFrameSrc(id, `move-${i + 1}`, bust))));
+      // Cultist V2 and Lancer ("Lanceiro") both had their two walk cuts delivered swapped —
+      // "move-*" is actually the leftward cut and "move-left-*" is the rightward one — so the
+      // right-facing pool reads from "move-left-*" here for these two, and their dedicated
+      // walksLeft loads below read from "move-*" instead.
+      const pattern = id === "cultist-v2" || id === "lancer" ? "move-left" : "move";
+      walks[id] = await Promise.all(Array.from({ length: n }, (_, i) => loadImage(spriteFrameSrc(id, `${pattern}-${i + 1}`, bust))));
     }),
   );
   const walksLeft: Partial<Record<SpriteId, HTMLImageElement[]>> = {};
@@ -314,9 +328,20 @@ export async function loadGameArt(): Promise<GameArt> {
     DIR_LEFT.map(async (id) => {
       const walkN = WALK_FRAMES[id]?.n ?? 6;
       const atkN = ATTACK_FRAMES[id]?.n ?? 5;
-      const bust = id === "lancer" ? "?v=3" : id === "sandoval" ? "?v=sandoval-complete-001" : id === "aldric" ? "?v=aldric-final-001" : "?v=sheet2";
-      walksLeft[id] = await Promise.all(Array.from({ length: walkN }, (_, i) => loadImage(spriteFrameSrc(id, `move-left-${i + 1}`, bust))));
-      attacksLeft[id] = await Promise.all(Array.from({ length: atkN }, (_, i) => loadImage(spriteFrameSrc(id, `atk-left-${i + 1}`, bust))));
+      const bust = id === "lancer" ? "?v=4" : id === "sandoval" ? "?v=sandoval-complete-001" : id === "aldric" ? "?v=aldric-final-001" : "?v=sheet2";
+      // See the "move"/"move-left" swap note in the generic walks loop above — Lancer's walk
+      // cuts are swapped, so its left-facing pool reads "move-*" (the actually-leftward cut)
+      // instead of "move-left-*". Its attack cuts are correctly named already.
+      const walkPattern = id === "lancer" ? "move" : "move-left";
+      walksLeft[id] = await Promise.all(Array.from({ length: walkN }, (_, i) => loadImage(spriteFrameSrc(id, `${walkPattern}-${i + 1}`, bust))));
+      // Malrec's new 36-frame attack cut (malrec-atk-002) has no matching left-facing sheet —
+      // only the old 5-frame atk-left-*.png still exists, which would desync from the new
+      // frame count and freeze on frame 0 past index 4. Skip it here so the render falls back
+      // to CSS-mirroring the right-facing pool instead (see dirActionAttack in engine.ts,
+      // which no longer lists malrec for the same reason).
+      if (id !== "malrec") {
+        attacksLeft[id] = await Promise.all(Array.from({ length: atkN }, (_, i) => loadImage(spriteFrameSrc(id, `atk-left-${i + 1}`, bust))));
+      }
     }),
   );
   // The Butcher has its own authored left-facing walk cut, but no dedicated left-facing
@@ -330,8 +355,11 @@ export async function loadGameArt(): Promise<GameArt> {
   // Cultist V2 has its own authored left-facing walk cut but no dedicated left-facing attack
   // cut (only one Attack sheet was supplied) — same shape as theButcher above: its own
   // standalone walksLeft load, attack keeps mirroring the right-facing pool when facing left.
+  // See the "move"/"move-left" swap note in the generic walks loop above — this pool reads
+  // "move-*" (the actually-leftward cut) since the file names are swapped from every other
+  // sprite's convention.
   walksLeft["cultist-v2"] = await Promise.all(
-    Array.from({ length: WALK_FRAMES["cultist-v2"]!.n }, (_, i) => loadImage(spriteFrameSrc("cultist-v2", `move-left-${i + 1}`, WALK_FRAMES["cultist-v2"]!.bust))),
+    Array.from({ length: WALK_FRAMES["cultist-v2"]!.n }, (_, i) => loadImage(spriteFrameSrc("cultist-v2", `move-${i + 1}`, WALK_FRAMES["cultist-v2"]!.bust))),
   );
   const impact = await Promise.all([1, 2, 3, 4].map((n) => loadImage(`/game/fx/impact-${n}.png`)));
   // v2: real alpha-cutout comet art (ball + trailing wisps), replacing the old flattened
